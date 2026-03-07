@@ -26,9 +26,7 @@ import {
   useRespondFriendRequest,
   useMutualFriends,
 } from '../../hooks/friends.hook';
-
-// Добавь в SearchStackParamList:
-// UserProfileScreen: { user: SearchUser }
+import { useUserOnlineStatus } from '../../hooks/presence.hook';
 
 type RouteParams = {
   UserProfileScreen: { user: SearchUser };
@@ -61,6 +59,7 @@ const UserProfileScreen = () => {
   // ── Data ──────────────────────────────────────────────────────────────────────
   const { data: status, isLoading: statusLoading } = useRelationshipStatus(user.id);
   const { data: mutuals }                          = useMutualFriends(user.id);
+  const { isOnline }                               = useUserOnlineStatus(user.id);
 
   const { mutate: sendRequest,    isPending: isSending    } = useSendFriendRequest();
   const { mutate: cancelRequest,  isPending: isCanceling  } = useCancelFriendRequest();
@@ -229,7 +228,15 @@ const UserProfileScreen = () => {
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
           <Icon name="arrow-left" size={22} color={colors.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>@{user.username}</Text>
+        <View style={styles.headerCenter}>
+          <Text style={styles.headerTitle} numberOfLines={1}>@{user.username}</Text>
+          {isOnline && (
+            <View style={styles.headerOnlineBadge}>
+              <View style={styles.headerOnlineDot} />
+              <Text style={styles.headerOnlineText}>онлайн</Text>
+            </View>
+          )}
+        </View>
         <View style={{ width: 40 }} />
       </View>
 
@@ -241,11 +248,27 @@ const UserProfileScreen = () => {
         <Animated.View
           style={[styles.avatarSection, { opacity: fadeIn, transform: [{ scale: avatarScale }] }]}
         >
-          {user.avatarUrl ? (
-            <Image source={{ uri: user.avatarUrl }} style={styles.avatar} />
+          <View style={styles.avatarWrapper}>
+            {user.avatarUrl ? (
+              <Image source={{ uri: user.avatarUrl }} style={styles.avatar} />
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <Text style={styles.avatarInitials}>{initials}</Text>
+              </View>
+            )}
+            {/* Онлайн-точка на аватаре */}
+            {isOnline && <View style={styles.avatarOnlineDot} />}
+          </View>
+          {/* Статус под аватаром */}
+          {isOnline ? (
+            <View style={styles.statusPill}>
+              <View style={styles.statusDot} />
+              <Text style={styles.statusText}>В сети</Text>
+            </View>
           ) : (
-            <View style={styles.avatarPlaceholder}>
-              <Text style={styles.avatarInitials}>{initials}</Text>
+            <View style={[styles.statusPill, styles.statusPillOffline]}>
+              <View style={[styles.statusDot, styles.statusDotOffline]} />
+              <Text style={[styles.statusText, styles.statusTextOffline]}>Не в сети</Text>
             </View>
           )}
         </Animated.View>
@@ -296,7 +319,6 @@ const UserProfileScreen = () => {
         <Animated.View style={[styles.actionsSection, { opacity: fadeIn, transform: [{ translateY: slideUp }] }]}>
           {renderMainAction()}
 
-          {/* Block / Unblock — не показываем если уже заблокирован ими */}
           {status !== 'BLOCKED_BY_THEM' && status !== 'BLOCKED_BY_ME' && (
             <TouchableOpacity
               style={styles.blockBtn}
@@ -333,12 +355,24 @@ const styles = StyleSheet.create({
     backgroundColor: colors.secondary + '40',
     alignItems: 'center', justifyContent: 'center',
   },
+  headerCenter: { flex: 1, alignItems: 'center', gap: 4 },
   headerTitle: { fontSize: 16, fontWeight: '600', color: colors.primary },
+  headerOnlineBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: '#7ec8a015',
+    borderRadius: 8, borderWidth: 1, borderColor: '#7ec8a040',
+    paddingHorizontal: 8, paddingVertical: 3,
+  },
+  headerOnlineDot: {
+    width: 6, height: 6, borderRadius: 3, backgroundColor: '#7ec8a0',
+  },
+  headerOnlineText: { fontSize: 11, fontWeight: '600', color: '#7ec8a0' },
 
   scrollContent: { paddingHorizontal: 24, paddingTop: 32 },
 
   // Avatar
   avatarSection: { alignItems: 'center', marginBottom: 20 },
+  avatarWrapper: { position: 'relative', marginBottom: 12 },
   avatar: {
     width: 108, height: 108, borderRadius: 54,
     borderWidth: 3, borderColor: colors.accent + '60',
@@ -350,6 +384,30 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   avatarInitials: { fontSize: 36, fontWeight: '700', color: colors.text },
+  avatarOnlineDot: {
+    position: 'absolute', bottom: 4, right: 4,
+    width: 18, height: 18, borderRadius: 9,
+    backgroundColor: '#7ec8a0',
+    borderWidth: 3, borderColor: colors.background,
+  },
+
+  // Status pill под аватаром
+  statusPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#7ec8a015',
+    borderRadius: 20, borderWidth: 1, borderColor: '#7ec8a040',
+    paddingHorizontal: 12, paddingVertical: 5,
+  },
+  statusPillOffline: {
+    backgroundColor: colors.secondary + '20',
+    borderColor: colors.primary + '20',
+  },
+  statusDot: {
+    width: 7, height: 7, borderRadius: 4, backgroundColor: '#7ec8a0',
+  },
+  statusDotOffline: { backgroundColor: colors.primary + '50' },
+  statusText: { fontSize: 12, fontWeight: '600', color: '#7ec8a0' },
+  statusTextOffline: { color: colors.primary + '60' },
 
   // Name
   nameSection: { alignItems: 'center', marginBottom: 24 },

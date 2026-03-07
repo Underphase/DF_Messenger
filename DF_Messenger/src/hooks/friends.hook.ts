@@ -41,8 +41,9 @@ export const useRemoveFriend = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (friendId: number) => friendsApi.removeFriend(friendId),
-    onSuccess: () => {
+    onSuccess: (_, friendId) => {
       queryClient.invalidateQueries({ queryKey: friendsQueryKeys.list });
+      queryClient.invalidateQueries({ queryKey: friendsQueryKeys.status(friendId) });
     },
   });
 };
@@ -79,6 +80,8 @@ export const useSendFriendRequest = () => {
       queryClient.invalidateQueries({ queryKey: friendsQueryKeys.status(receiverId) });
       queryClient.invalidateQueries({ queryKey: friendsQueryKeys.sentRequests });
       queryClient.invalidateQueries({ queryKey: friendsQueryKeys.requestsCount });
+      // Обновляем список друзей — вдруг кто-то уже принял наш старый запрос
+      queryClient.invalidateQueries({ queryKey: friendsQueryKeys.list });
     },
   });
 };
@@ -94,6 +97,7 @@ export const useCancelFriendRequest = () => {
       queryClient.invalidateQueries({ queryKey: friendsQueryKeys.status(targetId) });
       queryClient.invalidateQueries({ queryKey: friendsQueryKeys.sentRequests });
       queryClient.invalidateQueries({ queryKey: friendsQueryKeys.requestsCount });
+      queryClient.invalidateQueries({ queryKey: friendsQueryKeys.list });
     },
   });
 };

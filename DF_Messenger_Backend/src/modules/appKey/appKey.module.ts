@@ -10,4 +10,4 @@ import { AppKeyService } from './appKey.service'
 	exports: [AppKeyRepository, AppKeyService],
 	providers: [AppKeyRepository, AppKeyService]
 })
-export class AppKeyModule {}
+export class AppKeyModule { }

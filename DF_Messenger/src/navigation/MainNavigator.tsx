@@ -5,10 +5,13 @@ import { ProfileStack } from '../screens/main/ProfileScreen';
 import BubbleTabBar from './BubbleTabBar';
 import { SearchStack } from './SearchStack';
 import { MainTabParamList } from './types';
+import { useRegisterPresence } from '../hooks/presence.hook';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
 const MainNavigator = () => {
+  useRegisterPresence();
+
   return (
     <Tab.Navigator
       tabBar={props => <BubbleTabBar {...props} />}

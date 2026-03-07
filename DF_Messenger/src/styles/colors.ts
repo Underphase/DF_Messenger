@@ -5,5 +5,6 @@ export const colors = {
 	background: '#110d16',
 	accent: '#ab6d88',
 	notification: '#004a87',
-	text: '#e8e0ed'
+	text: '#e8e0ed',
+	onlineColor: '#7ec8a0'
 };

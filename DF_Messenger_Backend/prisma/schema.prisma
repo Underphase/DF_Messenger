@@ -16,60 +16,118 @@ model User {
   description String?
   avatarUrl   String? @db.VarChar(512)
   isVerified  Boolean @default(false)
-  
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt()
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt()
 
-  sentRequests          Friendship[]      @relation("sender")
-  receivedRequests      Friendship[]      @relation("receiver")
-  blockedUsers          Block[]           @relation("blocker")
-  blockedByUsers        Block[]           @relation("blocked")
-
-  refreshToken RefreshToken[]
+  sentRequests     Friendship[]      @relation("sender")
+  receivedRequests Friendship[]      @relation("receiver")
+  blockedUsers     Block[]           @relation("blocker")
+  blockedByUsers   Block[]           @relation("blocked")
+  refreshToken     RefreshToken[]
+  chatParticipants ChatParticipant[]
+  messages         Message[]
+  reactions        MessageReaction[]
+  readReceipts     MessageRead[]
 }
 
 model Friendship {
-  id      Int       @id      @default(autoincrement())
-  senderId      Int           
-  receiverId    Int
-  status        FriendshipStatus    @default(PENDING)
+  id         Int              @id @default(autoincrement())
+  senderId   Int
+  receiverId Int
+  status     FriendshipStatus @default(PENDING)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt()
 
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt()
-
-  sender    User    @relation("sender", fields: [senderId], references: [id])
-  receiver  User    @relation("receiver", fields: [receiverId], references: [id])
+  sender   User @relation("sender", fields: [senderId], references: [id])
+  receiver User @relation("receiver", fields: [receiverId], references: [id])
 
   @@unique([senderId, receiverId])
 }
 
-enum FriendshipStatus {
-  PENDING
-  ACCEPTED
-  DECLINED
-}
-
 model Block {
-  id              Int       @id     @default(autoincrement())
-  blockerId       Int       
-  blockedId       Int
-  
-  blocker         User      @relation("blocker", fields: [blockerId], references: [id])
-  blocked         User      @relation("blocked", fields: [blockedId], references: [id])
+  id        Int      @id @default(autoincrement())
+  blockerId Int
+  blockedId Int
+  createdAt DateTime @default(now())
 
-  createdAt       DateTime  @default(now())
+  blocker User @relation("blocker", fields: [blockerId], references: [id])
+  blocked User @relation("blocked", fields: [blockedId], references: [id])
 
   @@unique([blockerId, blockedId])
   @@index([blockedId])
   @@index([blockerId])
 }
 
-model RefreshToken {
-  id     Int  @id @default(autoincrement())
-  userId Int
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+model Chat {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt()
 
-  familyId          String    @default(uuid())              @db.Uuid 
+  participants ChatParticipant[]
+  messages     Message[]
+}
+
+model ChatParticipant {
+  id         Int       @id @default(autoincrement())
+  chatId     Int
+  userId     Int
+  lastReadAt DateTime?
+
+  chat Chat @relation(fields: [chatId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([chatId, userId])
+}
+
+model Message {
+  id              Int         @id @default(autoincrement())
+  chatId          Int
+  senderId        Int
+  content         String?
+  type            MessageType @default(TEXT)
+  mediaUrl        String?     @db.VarChar(512)
+  forwardedFromId Int?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt()
+
+  chat          Chat              @relation(fields: [chatId], references: [id])
+  sender        User              @relation(fields: [senderId], references: [id])
+  reactions     MessageReaction[]
+  readReceipts  MessageRead[]
+  forwardedFrom Message?          @relation("Forward", fields: [forwardedFromId], references: [id])
+  forwardedTo   Message[]         @relation("Forward")
+
+  @@index([chatId])
+}
+
+model MessageReaction {
+  id        Int    @id @default(autoincrement())
+  messageId Int
+  userId    Int
+  emoji     String
+
+  message Message @relation(fields: [messageId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([messageId, userId, emoji])
+}
+
+model MessageRead {
+  id        Int      @id @default(autoincrement())
+  messageId Int
+  userId    Int
+  readAt    DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([messageId, userId])
+}
+
+model RefreshToken {
+  id                Int       @id @default(autoincrement())
+  userId            Int
+  familyId          String    @default(uuid()) @db.Uuid
   tokenHash         String    @db.Text
   previousTokenHash String?   @db.Text
   usedAt            DateTime?
@@ -78,9 +136,11 @@ model RefreshToken {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt()
 
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId])
   @@index([familyId])
-  @@index([userId, revoked]) 
+  @@index([userId, revoked])
 }
 
 model AppKeys {
@@ -91,4 +151,17 @@ model AppKeys {
 model Devices {
   id        Int    @id @default(autoincrement())
   deviceKey String
+}
+
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  FILE
 }

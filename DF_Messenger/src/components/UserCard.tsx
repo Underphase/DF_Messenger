@@ -17,7 +17,8 @@ import {
   useRemoveFriend,
   useBlockUser,
 } from '../hooks/friends.hook';
-import { colors } from '../styles/colors'
+import { useUserOnlineStatus } from '../hooks/presence.hook';
+import { colors } from '../styles/colors';
 
 interface UserCardProps {
   user: SearchUser;
@@ -28,27 +29,18 @@ const UserCard: React.FC<UserCardProps> = ({ user, onPress }) => {
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const { data: status, isLoading: statusLoading } = useRelationshipStatus(user.id);
-  const { mutate: sendRequest, isPending: isSending } = useSendFriendRequest();
+  const { mutate: sendRequest,  isPending: isSending   } = useSendFriendRequest();
   const { mutate: cancelRequest, isPending: isCanceling } = useCancelFriendRequest();
-  const { mutate: removeFriend, isPending: isRemoving } = useRemoveFriend();
-  const { mutate: blockUser, isPending: isBlocking } = useBlockUser();
+  const { mutate: removeFriend,  isPending: isRemoving  } = useRemoveFriend();
+  const { mutate: blockUser,     isPending: isBlocking  } = useBlockUser();
+  const { isOnline } = useUserOnlineStatus(user.id);
 
   const handlePressIn = () => {
-    Animated.spring(scaleAnim, {
-      toValue: 0.97,
-      friction: 8,
-      tension: 100,
-      useNativeDriver: true,
-    }).start();
+    Animated.spring(scaleAnim, { toValue: 0.97, friction: 8, tension: 100, useNativeDriver: true }).start();
   };
 
   const handlePressOut = () => {
-    Animated.spring(scaleAnim, {
-      toValue: 1,
-      friction: 8,
-      tension: 100,
-      useNativeDriver: true,
-    }).start();
+    Animated.spring(scaleAnim, { toValue: 1, friction: 8, tension: 100, useNativeDriver: true }).start();
   };
 
   const initials = user.nickName
@@ -130,7 +122,6 @@ const UserCard: React.FC<UserCardProps> = ({ user, onPress }) => {
           </TouchableOpacity>
         );
 
-      // 'NONE' или undefined
       default:
         return (
           <TouchableOpacity
@@ -167,21 +158,22 @@ const UserCard: React.FC<UserCardProps> = ({ user, onPress }) => {
               <Text style={styles.avatarInitials}>{initials}</Text>
             </View>
           )}
-          {status === 'FRIENDS' && <View style={styles.friendDot} />}
+          {isOnline && <View style={styles.onlineDot} />}
         </View>
 
         {/* Info */}
         <View style={styles.info}>
-          <Text style={styles.nickName} numberOfLines={1}>
-            {user.nickName}
-          </Text>
-          <Text style={styles.username} numberOfLines={1}>
-            @{user.username}
-          </Text>
+          <View style={styles.nameRow}>
+            <Text style={styles.nickName} numberOfLines={1}>{user.nickName}</Text>
+            {isOnline && (
+              <View style={styles.onlinePill}>
+                <Text style={styles.onlinePillText}>онлайн</Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.username} numberOfLines={1}>@{user.username}</Text>
           {user.description ? (
-            <Text style={styles.description} numberOfLines={1}>
-              {user.description}
-            </Text>
+            <Text style={styles.description} numberOfLines={1}>{user.description}</Text>
           ) : null}
         </View>
 
@@ -205,87 +197,51 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     gap: 14,
   },
-  avatarWrapper: {
-    position: 'relative',
-  },
+  avatarWrapper: { position: 'relative' },
   avatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    borderWidth: 2,
-    borderColor: colors.accent + '50',
+    width: 52, height: 52, borderRadius: 26,
+    borderWidth: 2, borderColor: colors.accent + '50',
   },
   avatarPlaceholder: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 52, height: 52, borderRadius: 26,
     backgroundColor: colors.secondary + '60',
-    borderWidth: 2,
-    borderColor: colors.accent + '30',
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderWidth: 2, borderColor: colors.accent + '30',
+    alignItems: 'center', justifyContent: 'center',
   },
-  avatarInitials: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
-    letterSpacing: 0.5,
+  avatarInitials: { fontSize: 18, fontWeight: '700', color: colors.text, letterSpacing: 0.5 },
+  onlineDot: {
+    position: 'absolute', bottom: 1, right: 1,
+    width: 12, height: 12, borderRadius: 6,
+    backgroundColor: colors.onlineColor,
+    borderWidth: 2, borderColor: colors.background,
   },
-  friendDot: {
-    position: 'absolute',
-    bottom: 1,
-    right: 1,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#4ade80',
-    borderWidth: 2,
-    borderColor: colors.background,
+  info: { flex: 1, gap: 2 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 7, flexShrink: 1 },
+  nickName: { fontSize: 15, fontWeight: '700', color: colors.text, letterSpacing: -0.2, flexShrink: 1 },
+  onlinePill: {
+    backgroundColor: colors.onlineColor + '20',
+    borderRadius: 5, borderWidth: 1, borderColor: colors.onlineColor + '50',
+    paddingHorizontal: 6, paddingVertical: 2,
   },
-  info: {
-    flex: 1,
-    gap: 2,
-  },
-  nickName: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.text,
-    letterSpacing: -0.2,
-  },
-  username: {
-    fontSize: 13,
-    color: colors.accent,
-    fontWeight: '500',
-  },
-  description: {
-    fontSize: 12,
-    color: colors.primary + '80',
-    marginTop: 2,
-  },
+  onlinePillText: { fontSize: 10, fontWeight: '700', color: colors.onlineColor },
+  username: { fontSize: 13, color: colors.accent, fontWeight: '500' },
+  description: { fontSize: 12, color: colors.primary + '80', marginTop: 2 },
   actionBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 40, height: 40, borderRadius: 12,
+    alignItems: 'center', justifyContent: 'center',
   },
-  addBtn: {
-    backgroundColor: colors.accent,
-  },
+  addBtn: { backgroundColor: colors.accent },
   friendsBtn: {
     backgroundColor: colors.accent + '25',
-    borderWidth: 1.5,
-    borderColor: colors.accent + '50',
+    borderWidth: 1.5, borderColor: colors.accent + '50',
   },
   pendingBtn: {
     backgroundColor: colors.secondary + '40',
-    borderWidth: 1.5,
-    borderColor: colors.primary + '30',
+    borderWidth: 1.5, borderColor: colors.primary + '30',
   },
   disabledBtn: {
     backgroundColor: colors.secondary + '20',
-    borderWidth: 1.5,
-    borderColor: colors.primary + '15',
+    borderWidth: 1.5, borderColor: colors.primary + '15',
   },
 });
 
