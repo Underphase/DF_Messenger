@@ -1,7 +1,6 @@
-import { Bucket$, DeleteObjectCommand, GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
-import { Injectable } from '@nestjs/common';
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { Injectable } from '@nestjs/common'
 
 
 const bucketText = 'avatars';
@@ -13,10 +12,10 @@ export class MinioService {
 	constructor() {
 		this.client = new S3Client({
 			region: 'us-east-1',
-			endpoint: 'http://localhost:9000',
+			endpoint: process.env.MINIO_ENDPOINT!,
 			credentials: {
-				accessKeyId: 'difsel',
-				secretAccessKey: 'difsel123456'
+				accessKeyId: process.env.MINIO_ACCESS_KEY!,
+				secretAccessKey: process.env.MINIO_SECRET_ACCESS_KEY!
 			},
 			forcePathStyle: true
 		});
@@ -42,22 +41,54 @@ export class MinioService {
 		return response.Body;
 	}
 
-	async deleteFile(key: string) {
+	async deleteFile(bucket: string, key: string) {
 		const command = new DeleteObjectCommand({
-			Bucket: bucketText,
+			Bucket: bucket,
 			Key: key
 		});
 
 		await this.client.send(command);
 	}
 
-	async getPresignedUrl(key: string){
-		const command = new GetObjectCommand({
-			Bucket: bucketText,
+	async getUploadUrl(bucket: string, key: string, expiresIn = 900) {
+		const command = new PutObjectCommand({
+			Bucket: bucket,
 			Key: key
 		})
-
-		const url = await getSignedUrl(this.client, command, {expiresIn: 1 * 60 * 1000})
-		return url;
+		return getSignedUrl(this.client, command, { expiresIn });
 	}
+
+	async getDownloadUrl(bucket: string, key: string, expiresIn = 3600) {
+		const command = new GetObjectCommand({
+			Bucket: bucket,
+			Key: key
+		});
+		return getSignedUrl(this.client, command, {expiresIn});
+	}
+
+	async checkExists(bucket: string, key: string): Promise<boolean> {
+		try{
+			const command = new HeadObjectCommand({
+				Bucket: bucket,
+				Key: key
+			});
+			await this.client.send(command);
+			return true;
+		}catch(err: any){
+			if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) {
+				return false
+			}
+			throw err;
+		}
+	}
+
+	async getPresignedUrl(key: string){
+    const command = new GetObjectCommand({
+      Bucket: bucketText,
+      Key: key
+    })
+    const url = await getSignedUrl(this.client, command, {expiresIn: 60})
+    return url;
+  }
+
 }

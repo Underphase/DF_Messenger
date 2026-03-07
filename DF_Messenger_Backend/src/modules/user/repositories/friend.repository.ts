@@ -18,6 +18,7 @@ export class FriendRepository {
 	async searchUser(currUserId: number, searchText: string, skip: number = 0){
 		return await this.prisma.user.findMany({
 			where: {
+				isVerified: true,
 				AND: [
 					{ username: {contains: searchText, mode: 'insensitive'} },
 					{ id: { not: currUserId }},

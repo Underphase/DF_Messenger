@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common'
 import { PrismaService } from '../../../db/PrismaModule/prisma.service'
-import { nanoid } from 'nanoid'
 
 
 @Injectable()

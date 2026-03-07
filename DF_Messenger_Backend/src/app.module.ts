@@ -14,7 +14,8 @@ import { ScheduleModule } from '@nestjs/schedule'
 import { ThrottlerGuard, ThrottlerModule, ThrottlerStorage } from '@nestjs/throttler'
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis'
 import { minioModule } from './db/minio/minio.module'
-import { PresenceModule } from './modules/presence/presence.module'
+import { PresenceModule } from './modules/WebSocket/presence/presence.module'
+import { ChatModule } from './modules/chat/chat.module'
 
 @Module({
 	imports: [
@@ -41,7 +42,8 @@ import { PresenceModule } from './modules/presence/presence.module'
 		UserModule,
 		CommonModule,
 		AuthModule,
-		PresenceModule
+		PresenceModule,
+		ChatModule
 	],
 
 	providers: [
