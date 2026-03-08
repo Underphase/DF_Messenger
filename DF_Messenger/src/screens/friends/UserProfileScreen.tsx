@@ -13,6 +13,7 @@ import {
   View,
 } from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Icon from 'react-native-vector-icons/Feather';
 import { colors } from '../../styles/colors';
 import { SearchUser } from '../../api/friends.types';
@@ -26,14 +27,18 @@ import {
   useRespondFriendRequest,
   useMutualFriends,
 } from '../../hooks/friends.hook';
-import { useUserOnlineStatus } from '../../hooks/presence.hook';
+import { useCreateChat } from '../../hooks/chat.hook';
+import { SearchStackParamList, AppStackParamList, OtherUser } from '../../navigation/types';
 
 type RouteParams = {
   UserProfileScreen: { user: SearchUser };
 };
 
+// We need a navigation prop that can reach both SearchStack and AppStack screens
+type NavProp = NativeStackNavigationProp<AppStackParamList>;
+
 const UserProfileScreen = () => {
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavProp>();
   const route = useRoute<RouteProp<RouteParams, 'UserProfileScreen'>>();
   const { user } = route.params;
 
@@ -44,22 +49,17 @@ const UserProfileScreen = () => {
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fadeIn, {
-        toValue: 1, duration: 500, useNativeDriver: true,
-      }),
+      Animated.timing(fadeIn, { toValue: 1, duration: 500, useNativeDriver: true }),
       Animated.timing(slideUp, {
         toValue: 0, duration: 450, easing: Easing.out(Easing.cubic), useNativeDriver: true,
       }),
-      Animated.spring(avatarScale, {
-        toValue: 1, friction: 7, tension: 50, useNativeDriver: true,
-      }),
+      Animated.spring(avatarScale, { toValue: 1, friction: 7, tension: 50, useNativeDriver: true }),
     ]).start();
   }, []);
 
   // ── Data ──────────────────────────────────────────────────────────────────────
   const { data: status, isLoading: statusLoading } = useRelationshipStatus(user.id);
   const { data: mutuals }                          = useMutualFriends(user.id);
-  const { isOnline }                               = useUserOnlineStatus(user.id);
 
   const { mutate: sendRequest,    isPending: isSending    } = useSendFriendRequest();
   const { mutate: cancelRequest,  isPending: isCanceling  } = useCancelFriendRequest();
@@ -67,13 +67,10 @@ const UserProfileScreen = () => {
   const { mutate: blockUser,      isPending: isBlocking   } = useBlockUser();
   const { mutate: unblockUser,    isPending: isUnblocking } = useUnblockUser();
   const { mutate: respondRequest, isPending: isResponding } = useRespondFriendRequest();
+  const { mutateAsync: createChat, isPending: isCreatingChat } = useCreateChat();
 
   const initials = user.nickName
-    .split(' ')
-    .map((w) => w[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase();
+    .split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 
   // ── Handlers ──────────────────────────────────────────────────────────────────
   const handleRemoveFriend = () => {
@@ -92,17 +89,29 @@ const UserProfileScreen = () => {
         {
           text: 'Заблокировать',
           style: 'destructive',
-          onPress: () => {
-            blockUser(user.id);
-            navigation.goBack();
-          },
+          onPress: () => { blockUser(user.id); navigation.goBack(); },
         },
       ],
     );
   };
 
-  // ── Main action button ────────────────────────────────────────────────────────
-  const renderMainAction = () => {
+  const handleOpenChat = async () => {
+    try {
+      const chat = await createChat(user.id);
+      const otherUser: OtherUser = {
+        id: user.id,
+        nickName: user.nickName,
+        username: user.username,
+        avatarUrl: user.avatarUrl,
+      };
+      navigation.navigate('ChatScreen', { chatId: chat.id, otherUser });
+    } catch {
+      Alert.alert('Ошибка', 'Не удалось открыть чат');
+    }
+  };
+
+  // ── Friend action button ──────────────────────────────────────────────────────
+  const renderFriendAction = () => {
     if (statusLoading)
       return (
         <View style={[styles.mainBtn, { opacity: 0.5 }]}>
@@ -121,10 +130,8 @@ const UserProfileScreen = () => {
           >
             {isUnblocking
               ? <ActivityIndicator color="#ff6b6b" />
-              : <>
-                  <Icon name="slash" size={18} color="#ff6b6b" />
-                  <Text style={[styles.mainBtnText, { color: '#ff6b6b' }]}>Разблокировать</Text>
-                </>}
+              : <><Icon name="slash" size={18} color="#ff6b6b" />
+                  <Text style={[styles.mainBtnText, { color: '#ff6b6b' }]}>Разблокировать</Text></>}
           </TouchableOpacity>
         );
 
@@ -146,10 +153,8 @@ const UserProfileScreen = () => {
           >
             {isRemoving
               ? <ActivityIndicator color={colors.accent} />
-              : <>
-                  <Icon name="user-check" size={18} color={colors.accent} />
-                  <Text style={[styles.mainBtnText, { color: colors.accent }]}>Вы друзья</Text>
-                </>}
+              : <><Icon name="user-check" size={18} color={colors.accent} />
+                  <Text style={[styles.mainBtnText, { color: colors.accent }]}>Вы друзья</Text></>}
           </TouchableOpacity>
         );
 
@@ -163,10 +168,8 @@ const UserProfileScreen = () => {
           >
             {isCanceling
               ? <ActivityIndicator color="#ff6b6b" />
-              : <>
-                  <Icon name="x-circle" size={18} color="#ff6b6b" />
-                  <Text style={[styles.mainBtnText, { color: '#ff6b6b' }]}>Отменить запрос</Text>
-                </>}
+              : <><Icon name="x-circle" size={18} color="#ff6b6b" />
+                  <Text style={[styles.mainBtnText, { color: '#ff6b6b' }]}>Отменить запрос</Text></>}
           </TouchableOpacity>
         );
 
@@ -183,10 +186,8 @@ const UserProfileScreen = () => {
             >
               {isResponding
                 ? <ActivityIndicator color={colors.text} />
-                : <>
-                    <Icon name="check" size={18} color={colors.text} />
-                    <Text style={styles.mainBtnText}>Принять</Text>
-                  </>}
+                : <><Icon name="check" size={18} color={colors.text} />
+                    <Text style={styles.mainBtnText}>Принять</Text></>}
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.mainBtn, styles.declineBtn, { flex: 1 }]}
@@ -202,7 +203,7 @@ const UserProfileScreen = () => {
           </View>
         );
 
-      default: // NONE
+      default:
         return (
           <TouchableOpacity
             style={[styles.mainBtn, styles.addBtn]}
@@ -212,10 +213,8 @@ const UserProfileScreen = () => {
           >
             {isSending
               ? <ActivityIndicator color={colors.text} />
-              : <>
-                  <Icon name="user-plus" size={18} color={colors.text} />
-                  <Text style={styles.mainBtnText}>Добавить в друзья</Text>
-                </>}
+              : <><Icon name="user-plus" size={18} color={colors.text} />
+                  <Text style={styles.mainBtnText}>Добавить в друзья</Text></>}
           </TouchableOpacity>
         );
     }
@@ -228,53 +227,28 @@ const UserProfileScreen = () => {
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
           <Icon name="arrow-left" size={22} color={colors.text} />
         </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle} numberOfLines={1}>@{user.username}</Text>
-          {isOnline && (
-            <View style={styles.headerOnlineBadge}>
-              <View style={styles.headerOnlineDot} />
-              <Text style={styles.headerOnlineText}>онлайн</Text>
-            </View>
-          )}
-        </View>
+        <Text style={styles.headerTitle} numberOfLines={1}>@{user.username}</Text>
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Avatar */}
         <Animated.View
           style={[styles.avatarSection, { opacity: fadeIn, transform: [{ scale: avatarScale }] }]}
         >
-          <View style={styles.avatarWrapper}>
-            {user.avatarUrl ? (
-              <Image source={{ uri: user.avatarUrl }} style={styles.avatar} />
-            ) : (
-              <View style={styles.avatarPlaceholder}>
-                <Text style={styles.avatarInitials}>{initials}</Text>
-              </View>
-            )}
-            {/* Онлайн-точка на аватаре */}
-            {isOnline && <View style={styles.avatarOnlineDot} />}
-          </View>
-          {/* Статус под аватаром */}
-          {isOnline ? (
-            <View style={styles.statusPill}>
-              <View style={styles.statusDot} />
-              <Text style={styles.statusText}>В сети</Text>
-            </View>
+          {user.avatarUrl ? (
+            <Image source={{ uri: user.avatarUrl }} style={styles.avatar} />
           ) : (
-            <View style={[styles.statusPill, styles.statusPillOffline]}>
-              <View style={[styles.statusDot, styles.statusDotOffline]} />
-              <Text style={[styles.statusText, styles.statusTextOffline]}>Не в сети</Text>
+            <View style={styles.avatarPlaceholder}>
+              <Text style={styles.avatarInitials}>{initials}</Text>
             </View>
           )}
         </Animated.View>
 
         {/* Name */}
-        <Animated.View style={[styles.nameSection, { opacity: fadeIn, transform: [{ translateY: slideUp }] }]}>
+        <Animated.View
+          style={[styles.nameSection, { opacity: fadeIn, transform: [{ translateY: slideUp }] }]}
+        >
           <Text style={styles.nickName}>{user.nickName}</Text>
           <Text style={styles.username}>@{user.username}</Text>
           {user.description
@@ -303,22 +277,42 @@ const UserProfileScreen = () => {
             </View>
             <View style={styles.mutualInfo}>
               <Text style={styles.mutualTitle}>
-                {mutuals.length} общих {mutuals.length === 1 ? 'друг' : mutuals.length < 5 ? 'друга' : 'друзей'}
+                {mutuals.length} общих{' '}
+                {mutuals.length === 1 ? 'друг' : mutuals.length < 5 ? 'друга' : 'друзей'}
               </Text>
-              {mutuals.length > 0 && (
-                <Text style={styles.mutualNames} numberOfLines={1}>
-                  {mutuals.slice(0, 2).map(m => m.nickName).join(', ')}
-                  {mutuals.length > 2 ? ` и ещё ${mutuals.length - 2}` : ''}
-                </Text>
-              )}
+              <Text style={styles.mutualNames} numberOfLines={1}>
+                {mutuals.slice(0, 2).map((m) => m.nickName).join(', ')}
+                {mutuals.length > 2 ? ` и ещё ${mutuals.length - 2}` : ''}
+              </Text>
             </View>
           </Animated.View>
         )}
 
         {/* Actions */}
-        <Animated.View style={[styles.actionsSection, { opacity: fadeIn, transform: [{ translateY: slideUp }] }]}>
-          {renderMainAction()}
+        <Animated.View
+          style={[styles.actionsSection, { opacity: fadeIn, transform: [{ translateY: slideUp }] }]}
+        >
+          {/* ── Write message — always visible unless blocked ── */}
+          {status !== 'BLOCKED_BY_THEM' && status !== 'BLOCKED_BY_ME' && (
+            <TouchableOpacity
+              style={[styles.mainBtn, styles.messageBtn]}
+              onPress={handleOpenChat}
+              disabled={isCreatingChat}
+              activeOpacity={0.8}
+            >
+              {isCreatingChat
+                ? <ActivityIndicator color={colors.text} />
+                : <>
+                    <Icon name="message-circle" size={18} color={colors.text} />
+                    <Text style={styles.mainBtnText}>Написать сообщение</Text>
+                  </>}
+            </TouchableOpacity>
+          )}
 
+          {/* ── Friend action (add / cancel / accept / etc.) ── */}
+          {renderFriendAction()}
+
+          {/* ── Block ── */}
           {status !== 'BLOCKED_BY_THEM' && status !== 'BLOCKED_BY_ME' && (
             <TouchableOpacity
               style={styles.blockBtn}
@@ -336,7 +330,7 @@ const UserProfileScreen = () => {
           )}
         </Animated.View>
 
-        <View style={{ height: 100 }} />
+        <View style={{ height: 120 }} />
       </ScrollView>
     </View>
   );
@@ -355,24 +349,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.secondary + '40',
     alignItems: 'center', justifyContent: 'center',
   },
-  headerCenter: { flex: 1, alignItems: 'center', gap: 4 },
   headerTitle: { fontSize: 16, fontWeight: '600', color: colors.primary },
-  headerOnlineBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: '#7ec8a015',
-    borderRadius: 8, borderWidth: 1, borderColor: '#7ec8a040',
-    paddingHorizontal: 8, paddingVertical: 3,
-  },
-  headerOnlineDot: {
-    width: 6, height: 6, borderRadius: 3, backgroundColor: '#7ec8a0',
-  },
-  headerOnlineText: { fontSize: 11, fontWeight: '600', color: '#7ec8a0' },
 
   scrollContent: { paddingHorizontal: 24, paddingTop: 32 },
 
-  // Avatar
   avatarSection: { alignItems: 'center', marginBottom: 20 },
-  avatarWrapper: { position: 'relative', marginBottom: 12 },
   avatar: {
     width: 108, height: 108, borderRadius: 54,
     borderWidth: 3, borderColor: colors.accent + '60',
@@ -384,110 +365,67 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   avatarInitials: { fontSize: 36, fontWeight: '700', color: colors.text },
-  avatarOnlineDot: {
-    position: 'absolute', bottom: 4, right: 4,
-    width: 18, height: 18, borderRadius: 9,
-    backgroundColor: '#7ec8a0',
-    borderWidth: 3, borderColor: colors.background,
-  },
 
-  // Status pill под аватаром
-  statusPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: '#7ec8a015',
-    borderRadius: 20, borderWidth: 1, borderColor: '#7ec8a040',
-    paddingHorizontal: 12, paddingVertical: 5,
-  },
-  statusPillOffline: {
-    backgroundColor: colors.secondary + '20',
-    borderColor: colors.primary + '20',
-  },
-  statusDot: {
-    width: 7, height: 7, borderRadius: 4, backgroundColor: '#7ec8a0',
-  },
-  statusDotOffline: { backgroundColor: colors.primary + '50' },
-  statusText: { fontSize: 12, fontWeight: '600', color: '#7ec8a0' },
-  statusTextOffline: { color: colors.primary + '60' },
-
-  // Name
   nameSection: { alignItems: 'center', marginBottom: 24 },
-  nickName: {
-    fontSize: 26, fontWeight: '700', color: colors.text,
-    letterSpacing: -0.3, marginBottom: 4,
-  },
+  nickName: { fontSize: 26, fontWeight: '700', color: colors.text, letterSpacing: -0.3, marginBottom: 4 },
   username: { fontSize: 15, color: colors.accent, fontWeight: '600', marginBottom: 12 },
   description: {
-    fontSize: 15, color: colors.primary, textAlign: 'center',
-    lineHeight: 22, paddingHorizontal: 8,
+    fontSize: 15, color: colors.primary, textAlign: 'center', lineHeight: 22, paddingHorizontal: 8,
   },
   descriptionEmpty: {
-    fontSize: 14, color: colors.primary + '40',
-    textAlign: 'center', fontStyle: 'italic',
+    fontSize: 14, color: colors.primary + '40', textAlign: 'center', fontStyle: 'italic',
   },
 
-  // Mutual friends card
   mutualCard: {
     flexDirection: 'row', alignItems: 'center', gap: 14,
-    backgroundColor: colors.secondary + '25',
-    borderRadius: 16, borderWidth: 1, borderColor: colors.primary + '15',
+    backgroundColor: colors.secondary + '25', borderRadius: 16,
+    borderWidth: 1, borderColor: colors.primary + '15',
     paddingHorizontal: 16, paddingVertical: 14, marginBottom: 20,
   },
   mutualAvatars: { flexDirection: 'row', alignItems: 'center' },
-  mutualAvatar: {
-    width: 32, height: 32, borderRadius: 16,
-    borderWidth: 2, borderColor: colors.background,
-  },
+  mutualAvatar: { width: 32, height: 32, borderRadius: 16, borderWidth: 2, borderColor: colors.background },
   mutualAvatarImg: { width: 32, height: 32, borderRadius: 16 },
   mutualAvatarPlaceholder: {
     width: 32, height: 32, borderRadius: 16,
-    backgroundColor: colors.secondary + '80',
-    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.secondary + '80', alignItems: 'center', justifyContent: 'center',
   },
   mutualAvatarText: { fontSize: 11, fontWeight: '700', color: colors.text },
   mutualInfo: { flex: 1 },
   mutualTitle: { fontSize: 14, fontWeight: '700', color: colors.text, marginBottom: 2 },
   mutualNames: { fontSize: 12, color: colors.primary + '70' },
 
-  // Actions
   actionsSection: { gap: 10 },
   respondRow: { flexDirection: 'row', gap: 10 },
+
   mainBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 8, paddingVertical: 16, borderRadius: 16,
   },
   mainBtnText: { fontSize: 16, fontWeight: '700', color: colors.text },
+
+  // ── Button variants ──────────────────────────────────────────────────────────
+  messageBtn: {
+    backgroundColor: colors.secondary,
+    shadowColor: colors.secondary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25, shadowRadius: 8, elevation: 6,
+  },
   addBtn: {
     backgroundColor: colors.accent,
-    shadowColor: colors.accent,
-    shadowOffset: { width: 0, height: 6 },
+    shadowColor: colors.accent, shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.3, shadowRadius: 10, elevation: 8,
   },
-  friendsBtn: {
-    backgroundColor: colors.accent + '20',
-    borderWidth: 1.5, borderColor: colors.accent + '50',
-  },
-  cancelBtn: {
-    backgroundColor: '#ff6b6b12',
-    borderWidth: 1.5, borderColor: '#ff6b6b40',
-  },
+  friendsBtn: { backgroundColor: colors.accent + '20', borderWidth: 1.5, borderColor: colors.accent + '50' },
+  cancelBtn: { backgroundColor: '#ff6b6b12', borderWidth: 1.5, borderColor: '#ff6b6b40' },
   acceptBtn: { backgroundColor: colors.accent },
-  declineBtn: {
-    backgroundColor: colors.secondary + '40',
-    borderWidth: 1.5, borderColor: colors.primary + '30',
-  },
-  dangerOutline: {
-    backgroundColor: '#ff6b6b12',
-    borderWidth: 1.5, borderColor: '#ff6b6b40',
-  },
-  disabledBtn: {
-    backgroundColor: colors.secondary + '20',
-    borderWidth: 1.5, borderColor: colors.primary + '15',
-  },
+  declineBtn: { backgroundColor: colors.secondary + '40', borderWidth: 1.5, borderColor: colors.primary + '30' },
+  dangerOutline: { backgroundColor: '#ff6b6b12', borderWidth: 1.5, borderColor: '#ff6b6b40' },
+  disabledBtn: { backgroundColor: colors.secondary + '20', borderWidth: 1.5, borderColor: colors.primary + '15' },
+
   blockBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 8, paddingVertical: 14, borderRadius: 14,
-    backgroundColor: '#ff6b6b08',
-    borderWidth: 1, borderColor: '#ff6b6b20',
+    backgroundColor: '#ff6b6b08', borderWidth: 1, borderColor: '#ff6b6b20',
   },
   blockBtnText: { fontSize: 15, fontWeight: '600', color: '#ff6b6b' },
 });

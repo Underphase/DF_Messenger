@@ -1,9 +1,17 @@
 import { SearchUser } from '../api/friends.types';
 
+export interface OtherUser {
+  id: number;
+  nickName: string;
+  username: string;
+  avatarUrl: string | null;
+}
+
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 export type AppStackParamList = {
   MainScreen: undefined;
+  ChatScreen: { chatId: number; otherUser: OtherUser };
 };
 
 export type RootStackParamList = {
@@ -24,6 +32,12 @@ export type MainTabParamList = {
   Chats: undefined;
   Friends: undefined;
   Profile: undefined;
+};
+
+// ─── Chats stack (only ChatsScreen now — ChatScreen is in AppStack) ───────────
+
+export type ChatsStackParamList = {
+  ChatsScreen: undefined;
 };
 
 // ─── Search stack ─────────────────────────────────────────────────────────────

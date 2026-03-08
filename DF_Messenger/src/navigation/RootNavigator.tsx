@@ -5,10 +5,10 @@ import { StyleSheet, View } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { colors } from '../styles/colors';
 import { AppStackParamList, AuthStackParamList } from './types';
-
 import KeyScreen from '../screens/KeyScreen';
 import LoginScreen from '../screens/LoginScreen';
 import MainNavigator from './MainNavigator';
+import ChatScreen from '../screens/chat/ChatScreen';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const AppStack = createNativeStackNavigator<AppStackParamList>();
@@ -23,10 +23,15 @@ const RootNavigator = () => {
   return (
     <NavigationContainer>
       {authState === 'authenticated' ? (
-        <AppStack.Navigator
-          screenOptions={{ headerShown: false, animation: 'fade' }}
-        >
+        <AppStack.Navigator screenOptions={{ headerShown: false }}>
+          {/* Tab navigator lives here — tab bar is naturally hidden in ChatScreen */}
           <AppStack.Screen name="MainScreen" component={MainNavigator} />
+          {/* ChatScreen is ABOVE the tab navigator so the tab bar disappears */}
+          <AppStack.Screen
+            name="ChatScreen"
+            component={ChatScreen}
+            options={{ animation: 'slide_from_right' }}
+          />
         </AppStack.Navigator>
       ) : (
         <AuthStack.Navigator

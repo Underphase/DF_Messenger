@@ -16,6 +16,7 @@ import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis'
 import { minioModule } from './db/minio/minio.module'
 import { PresenceModule } from './modules/WebSocket/presence/presence.module'
 import { ChatModule } from './modules/chat/chat.module'
+import { ChatWSModule } from './modules/WebSocket/chat/chatWS.module'
 
 @Module({
 	imports: [
@@ -43,7 +44,8 @@ import { ChatModule } from './modules/chat/chat.module'
 		CommonModule,
 		AuthModule,
 		PresenceModule,
-		ChatModule
+		ChatModule,
+		ChatWSModule
 	],
 
 	providers: [

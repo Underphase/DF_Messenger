@@ -175,3 +175,64 @@ export const friendsApi = {
   getBlockedList: () =>
     api.get<BlockedUser[]>('/friends/block').then((res) => res.data),
 };
+
+// ─── ADD these imports at the top of src/api/index.ts ────────────────────────
+//
+// import {
+//   Chat,
+//   CreateChatResponse,
+//   DeleteChatResponse,
+//   Message,
+//   UnreadCount,
+//   UnreadPerChat,
+// } from './chat.types';
+//
+// ─── ADD this export at the bottom of src/api/index.ts ───────────────────────
+import {
+  Chat,
+  CreateChatResponse,
+  DeleteChatResponse,
+  Message,
+  UnreadCount,
+  UnreadPerChat,
+} from './chat.types';
+
+export const chatApi = {
+  // POST /chat/create  → { id, participants, ... }
+  createChat: (receiverId: number) =>
+    api
+      .post<CreateChatResponse>('/chat/create', { receiverId })
+      .then((r) => r.data),
+
+  // GET /chat/list
+  getUserChats: () =>
+    api.get<Chat[]>('/chat/list').then((r) => r.data),
+
+  // DELETE /chat/delete
+  deleteChat: (chatId: number, forEveryone: boolean) =>
+    api
+      .delete<DeleteChatResponse>('/chat/delete', {
+        data: { chatId, forEveryone },
+      })
+      .then((r) => r.data),
+
+  // GET /chat/messages?chatId=
+  getMessages: (chatId: number) =>
+    api
+      .get<Message[]>('/chat/messages', { params: { chatId } })
+      .then((r) => r.data),
+
+  // GET /chat/messages/search?chatId=&q=
+  searchMessages: (chatId: number, q: string) =>
+    api
+      .get<Message[]>('/chat/messages/search', { params: { chatId, q } })
+      .then((r) => r.data),
+
+  // GET /chat/unread/count
+  getUnreadCount: () =>
+    api.get<UnreadCount>('/chat/unread/count').then((r) => r.data),
+
+  // GET /chat/unread/per-chat
+  getUnreadPerChat: () =>
+    api.get<UnreadPerChat[]>('/chat/unread/per-chat').then((r) => r.data),
+};

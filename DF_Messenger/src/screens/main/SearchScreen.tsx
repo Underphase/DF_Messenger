@@ -1,3 +1,35 @@
+// SearchScreen.tsx — changes from previous version:
+// 1. Removed UserProfileModal entirely
+// 2. UserCard onPress → navigate directly to UserProfileScreen
+// 3. FriendCard onPress → navigate directly to UserProfileScreen
+
+// ── Key diff (replace existing handlers in SearchScreen) ─────────────────────
+
+// REMOVE these state vars:
+//   const [selectedUser, setSelectedUser] = useState<SearchUser | null>(null);
+//   const [modalVisible, setModalVisible] = useState(false);
+
+// REPLACE handleUserPress:
+//   const handleUserPress = (user: SearchUser) => {
+//     navigation.navigate('UserProfileScreen', { user });
+//   };
+
+// REPLACE handleFriendPress:
+//   const handleFriendPress = (friend: Friend) => {
+//     const asUser: SearchUser = {
+//       id: friend.id,
+//       nickName: friend.nickName,
+//       username: friend.username,
+//       description: friend.description,
+//       avatarUrl: friend.avatarUrl,
+//     };
+//     navigation.navigate('UserProfileScreen', { user: asUser });
+//   };
+
+// REMOVE <UserProfileModal> render at the bottom of return()
+
+// ── Full updated file ─────────────────────────────────────────────────────────
+
 import React, { useState, useRef, useEffect } from 'react';
 import {
   ActivityIndicator,
@@ -15,12 +47,12 @@ import {
   Dimensions,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQueryClient } from '@tanstack/react-query';
 import Icon from 'react-native-vector-icons/Feather';
 import { colors } from '../../styles/colors';
 import { SearchUser, Friend } from '../../api/friends.types';
 import UserCard from '../../components/UserCard';
-import UserProfileModal from '../../components/UserProfileModal';
 import {
   useSearchUsers,
   useFriends,
@@ -29,14 +61,15 @@ import {
   friendsQueryKeys,
 } from '../../hooks/friends.hook';
 import { useUserOnlineStatus } from '../../hooks/presence.hook';
+import { SearchStackParamList } from '../../navigation/types';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 type Tab = 'friends' | 'search';
+type NavProp = NativeStackNavigationProp<SearchStackParamList>;
 
-// Приглушённый шалфейный — не выбивается из палитры
 const ONLINE_COLOR = '#7ec8a0';
 
-// ─── Карточка друга ───────────────────────────────────────────────────────────
+// ─── Friend card ──────────────────────────────────────────────────────────────
 
 interface FriendCardProps {
   friend: Friend;
@@ -48,11 +81,7 @@ interface FriendCardProps {
 const FriendCard: React.FC<FriendCardProps> = ({ friend, onRemove, onPress, isRemoving }) => {
   const { isOnline } = useUserOnlineStatus(friend.id);
   const initials = friend.nickName
-    .split(' ')
-    .map((w: string) => w[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase();
+    .split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
 
   return (
     <TouchableOpacity
@@ -86,13 +115,9 @@ const FriendCard: React.FC<FriendCardProps> = ({ friend, onRemove, onPress, isRe
           : null}
       </View>
 
-      {/* Кнопка удаления — stopPropagation чтобы не открывать профиль */}
       <TouchableOpacity
         style={styles.removeBtn}
-        onPress={(e) => {
-          e.stopPropagation();
-          onRemove(friend.id, friend.nickName);
-        }}
+        onPress={(e) => { e.stopPropagation(); onRemove(friend.id, friend.nickName); }}
         disabled={isRemoving}
         activeOpacity={0.7}
         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -103,17 +128,15 @@ const FriendCard: React.FC<FriendCardProps> = ({ friend, onRemove, onPress, isRe
   );
 };
 
-// ─── Основной экран ───────────────────────────────────────────────────────────
+// ─── SearchScreen ─────────────────────────────────────────────────────────────
 
 const SearchScreen = () => {
-  const navigation  = useNavigation<any>();
+  const navigation = useNavigation<NavProp>();
   const queryClient = useQueryClient();
 
   const [tab, setTab]                       = useState<Tab>('friends');
   const [query, setQuery]                   = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [selectedUser, setSelectedUser]     = useState<SearchUser | null>(null);
-  const [modalVisible, setModalVisible]     = useState(false);
   const [refreshing, setRefreshing]         = useState(false);
 
   const headerFadeAnim   = useRef(new Animated.Value(0)).current;
@@ -121,10 +144,10 @@ const SearchScreen = () => {
   const slideAnim        = useRef(new Animated.Value(0)).current;
   const searchBarHeight  = useRef(new Animated.Value(0)).current;
 
-  const { data: requestsCountData }                                            = useRequestsCount();
-  const { data: searchResults, isLoading: isSearching }                       = useSearchUsers(debouncedQuery);
-  const { data: friends, isLoading: loadingFriends }                          = useFriends();
-  const { mutate: removeFriend, isPending: isRemoving }                       = useRemoveFriend();
+  const { data: requestsCountData }                              = useRequestsCount();
+  const { data: searchResults, isLoading: isSearching }         = useSearchUsers(debouncedQuery);
+  const { data: friends, isLoading: loadingFriends }            = useFriends();
+  const { mutate: removeFriend, isPending: isRemoving }         = useRemoveFriend();
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query), 400);
@@ -135,7 +158,6 @@ const SearchScreen = () => {
     Animated.timing(headerFadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }).start();
   }, []);
 
-  // ── Pull-to-refresh ──────────────────────────────────────────────────────────
   const handleRefresh = async () => {
     setRefreshing(true);
     await Promise.all([
@@ -152,13 +174,11 @@ const SearchScreen = () => {
     Animated.spring(searchBarHeight, { toValue: newTab === 'search' ? 1 : 0, friction: 15, tension: 80, useNativeDriver: true }).start();
   };
 
-  // Открыть модал из поиска
+  // ── Navigate to profile (no modal) ────────────────────────────────────────
   const handleUserPress = (user: SearchUser) => {
-    setSelectedUser(user);
-    setModalVisible(true);
+    navigation.navigate('UserProfileScreen', { user });
   };
 
-  // Открыть модал из списка друзей — приводим Friend к SearchUser
   const handleFriendPress = (friend: Friend) => {
     const asUser: SearchUser = {
       id: friend.id,
@@ -167,8 +187,7 @@ const SearchScreen = () => {
       description: friend.description,
       avatarUrl: friend.avatarUrl,
     };
-    setSelectedUser(asUser);
-    setModalVisible(true);
+    navigation.navigate('UserProfileScreen', { user: asUser });
   };
 
   const handleRemoveFriend = (friendId: number, name: string) => {
@@ -188,10 +207,10 @@ const SearchScreen = () => {
     outputRange: [colors.primary + '30', colors.accent + '80'],
   });
 
-  const badgeCount       = requestsCountData?.count ?? 0;
-  const friendsSlideX    = slideAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -SCREEN_WIDTH] });
-  const searchSlideX     = slideAnim.interpolate({ inputRange: [0, 1], outputRange: [SCREEN_WIDTH, 0] });
-  const searchBarScaleY  = searchBarHeight.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
+  const badgeCount      = requestsCountData?.count ?? 0;
+  const friendsSlideX   = slideAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -SCREEN_WIDTH] });
+  const searchSlideX    = slideAnim.interpolate({ inputRange: [0, 1], outputRange: [SCREEN_WIDTH, 0] });
+  const searchBarScaleY = searchBarHeight.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
   const searchBarOpacity = searchBarHeight.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0, 0, 1] });
 
   const renderFriendsContent = () => {
@@ -253,12 +272,10 @@ const SearchScreen = () => {
 
   return (
     <View style={styles.container}>
-      {/* ── Header ── */}
+      {/* Header */}
       <Animated.View style={[styles.header, { opacity: headerFadeAnim }]}>
         <View style={styles.headerTop}>
-          <Text style={styles.headerTitle}>
-            {tab === 'friends' ? 'Друзья' : 'Поиск'}
-          </Text>
+          <Text style={styles.headerTitle}>{tab === 'friends' ? 'Друзья' : 'Поиск'}</Text>
           <TouchableOpacity
             style={styles.requestsBtn}
             onPress={() => navigation.navigate('FriendRequestsScreen')}
@@ -318,19 +335,14 @@ const SearchScreen = () => {
         </Animated.View>
       </Animated.View>
 
-      {/* ── Sliding panels ── */}
+      {/* Sliding panels */}
       <View style={styles.contentContainer}>
         <Animated.View style={[styles.panel, { transform: [{ translateX: friendsSlideX }] }]}>
           <ScrollView
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
             refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={handleRefresh}
-                tintColor={colors.accent}
-                colors={[colors.accent]}
-              />
+              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.accent} colors={[colors.accent]} />
             }
           >
             {renderFriendsContent()}
@@ -344,12 +356,7 @@ const SearchScreen = () => {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
             refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={handleRefresh}
-                tintColor={colors.accent}
-                colors={[colors.accent]}
-              />
+              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.accent} colors={[colors.accent]} />
             }
           >
             {renderSearchContent()}
@@ -357,13 +364,7 @@ const SearchScreen = () => {
           </ScrollView>
         </Animated.View>
       </View>
-
-      {/* Modal — работает и для друзей, и для поиска */}
-      <UserProfileModal
-        user={selectedUser}
-        visible={modalVisible}
-        onClose={() => setModalVisible(false)}
-      />
+      {/* No UserProfileModal here anymore */}
     </View>
   );
 };
@@ -375,23 +376,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20, paddingBottom: 12,
     borderBottomWidth: 1, borderBottomColor: colors.primary + '12',
   },
-  headerTop: {
-    flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'space-between', marginBottom: 16,
-  },
+  headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
   headerTitle: { fontSize: 28, fontWeight: '700', color: colors.text, letterSpacing: -0.5 },
   requestsBtn: {
     width: 44, height: 44, borderRadius: 14,
-    backgroundColor: colors.secondary + '40',
-    borderWidth: 1, borderColor: colors.primary + '20',
-    alignItems: 'center', justifyContent: 'center',
-    position: 'relative',
+    backgroundColor: colors.secondary + '40', borderWidth: 1, borderColor: colors.primary + '20',
+    alignItems: 'center', justifyContent: 'center', position: 'relative',
   },
   badge: {
     position: 'absolute', top: -4, right: -4,
     minWidth: 18, height: 18, borderRadius: 9,
-    backgroundColor: colors.accent,
-    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center',
     paddingHorizontal: 4, borderWidth: 1.5, borderColor: colors.background,
   },
   badgeText: { fontSize: 10, fontWeight: '700', color: colors.text },
@@ -412,32 +407,23 @@ const styles = StyleSheet.create({
   tabBtnTextActive: { color: colors.text },
   searchBar: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: colors.secondary + '30',
-    borderWidth: 1.5, borderRadius: 14, paddingHorizontal: 16,
+    backgroundColor: colors.secondary + '30', borderWidth: 1.5,
+    borderRadius: 14, paddingHorizontal: 16,
     paddingVertical: Platform.OS === 'ios' ? 13 : 2, marginBottom: 2,
   },
-  searchInput: {
-    flex: 1, color: colors.text, fontSize: 15, fontWeight: '500',
-    paddingVertical: Platform.OS === 'android' ? 10 : 0,
-  },
+  searchInput: { flex: 1, color: colors.text, fontSize: 15, fontWeight: '500', paddingVertical: Platform.OS === 'android' ? 10 : 0 },
   contentContainer: { flex: 1, overflow: 'hidden' },
-  panel: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    width: SCREEN_WIDTH,
-  },
+  panel: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: SCREEN_WIDTH },
   scrollContent: { padding: 20, paddingTop: 16 },
   emptyHint: { alignItems: 'center', paddingTop: 48, paddingHorizontal: 24, gap: 12 },
   emptyIconWrapper: {
     width: 72, height: 72, borderRadius: 24,
-    backgroundColor: colors.secondary + '30',
-    borderWidth: 1, borderColor: colors.primary + '20',
+    backgroundColor: colors.secondary + '30', borderWidth: 1, borderColor: colors.primary + '20',
     alignItems: 'center', justifyContent: 'center', marginBottom: 4,
   },
   emptyHintTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
   emptyHintText: { fontSize: 14, color: colors.primary + '70', textAlign: 'center', lineHeight: 20 },
   center: { alignItems: 'center', paddingTop: 60 },
-
-  // Friend card
   friendCard: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: colors.secondary + '18', borderRadius: 18,
@@ -448,8 +434,7 @@ const styles = StyleSheet.create({
   friendAvatar: { width: 52, height: 52, borderRadius: 26, borderWidth: 2, borderColor: colors.accent + '50' },
   friendAvatarPlaceholder: {
     width: 52, height: 52, borderRadius: 26,
-    backgroundColor: colors.secondary + '60',
-    borderWidth: 2, borderColor: colors.accent + '30',
+    backgroundColor: colors.secondary + '60', borderWidth: 2, borderColor: colors.accent + '30',
     alignItems: 'center', justifyContent: 'center',
   },
   friendAvatarInitials: { fontSize: 18, fontWeight: '700', color: colors.text },
@@ -462,8 +447,8 @@ const styles = StyleSheet.create({
   friendNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   friendName: { fontSize: 15, fontWeight: '700', color: colors.text, flexShrink: 1 },
   onlinePill: {
-    backgroundColor: ONLINE_COLOR + '20',
-    borderRadius: 5, borderWidth: 1, borderColor: ONLINE_COLOR + '50',
+    backgroundColor: ONLINE_COLOR + '20', borderRadius: 5,
+    borderWidth: 1, borderColor: ONLINE_COLOR + '50',
     paddingHorizontal: 6, paddingVertical: 2,
   },
   onlinePillText: { fontSize: 10, fontWeight: '700', color: ONLINE_COLOR },
@@ -471,8 +456,7 @@ const styles = StyleSheet.create({
   friendDesc: { fontSize: 12, color: colors.primary + '70', marginTop: 2 },
   removeBtn: {
     width: 38, height: 38, borderRadius: 11,
-    backgroundColor: colors.secondary + '30',
-    borderWidth: 1, borderColor: colors.primary + '20',
+    backgroundColor: colors.secondary + '30', borderWidth: 1, borderColor: colors.primary + '20',
     alignItems: 'center', justifyContent: 'center',
   },
 });
