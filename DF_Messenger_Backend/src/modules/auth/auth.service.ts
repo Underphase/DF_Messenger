@@ -33,15 +33,15 @@ export class AuthService {
 				throw new ConflictException('Email уже занят и верифицирован')
 			}
 			await this.userRepo.delUser(existingUser.id)
-			if (await this.redis.CheckTTLKey(`${existingUser.email}:${existingUser.username}`)) {
-				await this.redis.delTemporaryCode(existingUser.email, existingUser.username)
+			if (await this.redis.CheckTTLKey(`${existingUser.email}`)) {
+				await this.redis.delTemporaryCode(existingUser.email)
 			}
 		}
 
 		const hashedPass = await bcrypt.hash(dto.password, 10)
 
 		const user = await this.registerRepo.createUser(dto.email, dto.nickName, hashedPass)
-		const code = await this.redis.generateTemporaryCode(user.email, user.username, 60)
+		const code = await this.redis.generateTemporaryCode(user.email, 60)
 		await this.mail.sendEmail('DF-Messenger', user.email, 'Ваш код для регистраций в приложений', code)
 
 		return {
@@ -57,7 +57,7 @@ export class AuthService {
 			throw new UnauthorizedException('Пользователь не найден')
 		}
 
-		const isConfirmCode = await this.redis.confirmTemporaryCode(user.email, user.username, dto.code)
+		const isConfirmCode = await this.redis.confirmTemporaryCode(user.email, dto.code)
 
 		if (isConfirmCode) {
 			await this.userRepo.verifyUser(user.id)
@@ -81,7 +81,7 @@ export class AuthService {
 		if (!compare) {
 			throw new UnauthorizedException('Неправильный пароль!')
 		}
-		const code = await this.redis.generateTemporaryCode(user.email, user.username, 60)
+		const code = await this.redis.generateTemporaryCode(user.email, 60)
 		await this.mail.sendEmail('DF-Messenger', user.email, 'Ваш код для входа в приложение', code)
 
 		return {
@@ -98,8 +98,8 @@ export class AuthService {
 		}
 
 		if (user.isVerified === false) {
-			await this.redis.delTemporaryCode(user.email, user.username)
-			const code = await this.redis.generateTemporaryCode(user.email, user.username, 60)
+			await this.redis.delTemporaryCode(user.email)
+			const code = await this.redis.generateTemporaryCode(user.email, 60)
 
 			await this.mail.sendEmail('DF-Messenger', user.email, 'Ваш код', code)
 			return {

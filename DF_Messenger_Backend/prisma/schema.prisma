@@ -12,7 +12,7 @@ model User {
   email       String  @unique
   password    String  @db.VarChar(255)
   nickName    String
-  username    String  @unique
+  username    String?  @unique
   description String?
   avatarUrl   String? @db.VarChar(512)
   isVerified  Boolean @default(false)
@@ -28,6 +28,7 @@ model User {
   messages         Message[]
   reactions        MessageReaction[]
   readReceipts     MessageRead[]
+  deletedMessages  MessageDeletedFor[]
 }
 
 model Friendship {
@@ -59,9 +60,11 @@ model Block {
 }
 
 model Chat {
-  id        Int      @id @default(autoincrement())
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt()
+  id                  Int      @id @default(autoincrement())
+  pinnedMessageId     Int?     @map("pinned_message_id")
+  pinnedMessage       Message? @relation("PinnedMessage", fields: [pinnedMessageId], references: [id])
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt()
 
   participants ChatParticipant[]
   messages     Message[]
@@ -87,6 +90,7 @@ model Message {
   type            MessageType @default(TEXT)
   mediaUrl        String?     @db.VarChar(512)
   forwardedFromId Int?
+  isPinned        Boolean     @default(false)
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt()
 
@@ -96,6 +100,8 @@ model Message {
   readReceipts  MessageRead[]
   forwardedFrom Message?          @relation("Forward", fields: [forwardedFromId], references: [id])
   forwardedTo   Message[]         @relation("Forward")
+  pinnedInChats Chat[]            @relation("PinnedMessage")
+  deletedFor    MessageDeletedFor[]
 
   @@index([chatId])
 }
@@ -106,8 +112,8 @@ model MessageReaction {
   userId    Int
   emoji     String
 
-  message Message @relation(fields: [messageId], references: [id])
-  user    User    @relation(fields: [userId], references: [id])
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([messageId, userId, emoji])
 }
@@ -118,8 +124,20 @@ model MessageRead {
   userId    Int
   readAt    DateTime @default(now())
 
-  message Message @relation(fields: [messageId], references: [id])
-  user    User    @relation(fields: [userId], references: [id])
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+}
+
+model MessageDeletedFor {
+  id        Int      @id @default(autoincrement())
+  messageId Int
+  userId    Int
+  deletedAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([messageId, userId])
 }

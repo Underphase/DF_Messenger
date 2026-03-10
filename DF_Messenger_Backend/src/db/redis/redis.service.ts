@@ -8,16 +8,16 @@ export class RedisService extends Redis implements OnModuleDestroy {
 		super(process.env.REDIS_URL!);
 	}
 
-	async generateTemporaryCode(userEmail: string, username: string, ttl: number = 300): Promise<string> {
+	async generateTemporaryCode(userEmail: string, ttl: number = 300): Promise<string> {
 		const code = randomInt(100000, 999999).toString();
 		
-		await this.setex(`${userEmail}:${username}`, ttl, code);
+		await this.setex(`${userEmail}`, ttl, code);
 
 		return code;
 	}
 
-	async confirmTemporaryCode(userEmail: string, username: string, code: string): Promise<boolean> {
-		const redisValue = await this.get(`${userEmail}:${username}`);
+	async confirmTemporaryCode(userEmail: string, code: string): Promise<boolean> {
+		const redisValue = await this.get(`${userEmail}`);
 
 		if(!redisValue) {
 			console.error('Код истёк или не найден!')
@@ -26,7 +26,7 @@ export class RedisService extends Redis implements OnModuleDestroy {
 
 		if(code === redisValue){
 			console.log('Правильный код')
-			await this.del(`${userEmail}:${username}`);
+			await this.del(`${userEmail}`);
 			return true;
 		}else{
 			console.log('Неправильный код')
@@ -35,8 +35,8 @@ export class RedisService extends Redis implements OnModuleDestroy {
 		
 	}
 
-	async delTemporaryCode(userEmail: string, username: string){
-		await this.del(`${userEmail}:${username}`);
+	async delTemporaryCode(userEmail: string){
+		await this.del(`${userEmail}`);
 	}
 
 	async CheckTTLKey(key: string): Promise<boolean> {

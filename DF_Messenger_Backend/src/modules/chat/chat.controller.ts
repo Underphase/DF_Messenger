@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Delete, Body, Query, Req, UseGuards } from '@nestjs/common'
+import { Controller, Post, Get, Delete, Patch, Body, Query, Req, UseGuards } from '@nestjs/common'
 import { JwtGuard, type AuthRequest } from '../../guards/jwt.guard'
 import { ChatService } from './chat.service'
 
@@ -12,7 +12,7 @@ export class ChatController {
     @Req() req: AuthRequest,
     @Body('receiverId') receiverId: number
   ) {
-    return this.chatService.createChat(req.user!.userId, receiverId)
+    return this.chatService.createChat(req.user!.userId, +receiverId)
   }
 
   @Get('list')
@@ -26,21 +26,24 @@ export class ChatController {
     @Body('chatId') chatId: number,
     @Body('forEveryone') forEveryone: boolean
   ) {
-    return this.chatService.deleteChat(chatId, forEveryone, req.user!.userId)
+    return this.chatService.deleteChat(+chatId, forEveryone, req.user!.userId)
   }
 
-	@Get('messages')
-	async getMessages(@Query('chatId') chatId: string) {
-		return this.chatService.getMessagesFromChat(Number(chatId))
-	}
+  @Get('messages')
+  async getMessages(
+    @Req() req: AuthRequest,
+    @Query('chatId') chatId: string
+  ) {
+    return this.chatService.getMessagesFromChat(Number(chatId), req.user!.userId)
+  }
 
-	@Get('messages/search')
-	async findMessage(
-		@Query('chatId') chatId: string,
-		@Query('q') search: string
-	) {
-		return this.chatService.findMessage(search, Number(chatId))
-	}
+  @Get('messages/search')
+  async findMessage(
+    @Query('chatId') chatId: string,
+    @Query('q') search: string
+  ) {
+    return this.chatService.findMessage(search, Number(chatId))
+  }
 
   @Get('unread/count')
   async getUnreadCount(@Req() req: AuthRequest) {
@@ -50,5 +53,40 @@ export class ChatController {
   @Get('unread/per-chat')
   async getUnreadCountsPerChat(@Req() req: AuthRequest) {
     return this.chatService.getUnreadCountsPerChat(req.user!.userId)
+  }
+
+  @Delete('message/delete')
+  async deleteMessage(
+    @Req() req: AuthRequest,
+    @Body('messageId') messageId: number,
+    @Body('forEveryone') forEveryone: boolean
+  ) {
+    return this.chatService.deleteMessage(+messageId, req.user!.userId, forEveryone)
+  }
+
+  @Patch('message/edit')
+  async editMessage(
+    @Req() req: AuthRequest,
+    @Body('messageId') messageId: number,
+    @Body('content') content: string
+  ) {
+    return this.chatService.editMessage(+messageId, req.user!.userId, content)
+  }
+
+  @Post('pin')
+  async pinMessage(
+    @Req() req: AuthRequest,
+    @Body('chatId') chatId: number,
+    @Body('messageId') messageId: number
+  ) {
+    return this.chatService.pinMessage(+chatId, +messageId, req.user!.userId)
+  }
+
+  @Post('unpin')
+  async unpinMessage(
+    @Req() req: AuthRequest,
+    @Body('chatId') chatId: number
+  ) {
+    return this.chatService.unpinMessage(+chatId, req.user!.userId)
   }
 }

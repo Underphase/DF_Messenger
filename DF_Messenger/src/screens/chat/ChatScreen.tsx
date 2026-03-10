@@ -3,12 +3,14 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  Clipboard,
   FlatList,
   Image,
   KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -21,42 +23,37 @@ import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import DocumentPicker from 'react-native-document-picker';
 import Icon from 'react-native-vector-icons/Feather';
 import { colors } from '../../styles/colors';
-import { useChatRoom, useTyping } from '../../hooks/chat.hook';
+import {
+  useChatRoom,
+  useChats,
+  useForwardToChat,
+  useSearchMessages,
+  useTyping,
+} from '../../hooks/chat.hook';
 import { useMe } from '../../hooks/user.hook';
 import { useUserOnlineStatus } from '../../hooks/presence.hook';
-import { Message } from '../../api/chat.types';
+import { Chat, Message, MessageType, PinnedMessage } from '../../api/chat.types';
 import { AppStackParamList } from '../../navigation/types';
-import { api } from '../../api/client'; // your axios instance
 
 type RouteParams = RouteProp<AppStackParamList, 'ChatScreen'>;
 
-const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '😡'];
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '😡', '👏'];
 
-// ─── Upload helper ────────────────────────────────────────────────────────────
-// Adjust endpoint + field names to match your backend
+// ─── helpers ──────────────────────────────────────────────────────────────────
 
-const uploadMedia = async (
-  chatId: number,
-  file: { uri: string; name: string; type: string },
-): Promise<{ url: string; type: string }> => {
-  const form = new FormData();
-  form.append('file', { uri: file.uri, name: file.name, type: file.type } as any);
-  form.append('chatId', String(chatId));
+function getOtherParticipant(chat: Chat, myId: number) {
+  return chat.participants?.find((p) => p.user.id !== myId)?.user
+    ?? chat.participants?.[0]?.user;
+}
 
-  const res = await api.post('/chat/upload', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
-  return res.data; // expect { url: string, type: 'IMAGE'|'VIDEO'|'AUDIO'|'FILE' }
-};
-
-// ─── Typing indicator ─────────────────────────────────────────────────────────
+// ─── TypingIndicator ──────────────────────────────────────────────────────────
 
 const TypingIndicator: React.FC = () => {
-  const dot0 = useRef(new Animated.Value(0)).current;
-  const dot1 = useRef(new Animated.Value(0)).current;
-  const dot2 = useRef(new Animated.Value(0)).current;
-  const dots = [dot0, dot1, dot2];
-
+  const dots = [
+    useRef(new Animated.Value(0)).current,
+    useRef(new Animated.Value(0)).current,
+    useRef(new Animated.Value(0)).current,
+  ];
   useEffect(() => {
     const anims = dots.map((dot, i) =>
       Animated.loop(
@@ -72,324 +69,691 @@ const TypingIndicator: React.FC = () => {
     return () => anims.forEach((a) => a.stop());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
   return (
-    <View style={typingStyles.wrap}>
-      <View style={typingStyles.bubble}>
+    <View style={tyS.wrap}>
+      <View style={tyS.bubble}>
         {dots.map((dot, i) => (
           <Animated.View
             key={i}
-            style={[typingStyles.dot, {
-              transform: [{ translateY: dot.interpolate({ inputRange: [0, 1], outputRange: [0, -5] }) }],
-            }]}
+            style={[tyS.dot, { transform: [{ translateY: dot.interpolate({ inputRange: [0, 1], outputRange: [0, -5] }) }] }]}
           />
         ))}
       </View>
     </View>
   );
 };
-
-const typingStyles = StyleSheet.create({
-  wrap: { paddingHorizontal: 16, paddingVertical: 4, alignSelf: 'flex-start' },
-  bubble: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: colors.secondary + '35',
-    borderRadius: 18, borderBottomLeftRadius: 4,
-    paddingHorizontal: 14, paddingVertical: 12,
-    borderWidth: 1, borderColor: colors.primary + '20',
-  },
-  dot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: colors.primary + '80' },
+const tyS = StyleSheet.create({
+  wrap:   { paddingHorizontal: 16, paddingVertical: 4, alignSelf: 'flex-start' },
+  bubble: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.secondary + '35', borderRadius: 18, borderBottomLeftRadius: 4, paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1, borderColor: colors.primary + '20' },
+  dot:    { width: 7, height: 7, borderRadius: 3.5, backgroundColor: colors.primary + '80' },
 });
 
-// ─── Message bubble ───────────────────────────────────────────────────────────
+// ─── PinnedBanner ─────────────────────────────────────────────────────────────
+
+const PinnedBanner: React.FC<{
+  pinned: PinnedMessage;
+  onPress: () => void;
+  onUnpin: () => void;
+}> = ({ pinned, onPress, onUnpin }) => {
+  const labels: Record<MessageType, string> = {
+    TEXT: pinned.content ?? '',
+    IMAGE: '🖼 Фото', VIDEO: '🎥 Видео', FILE: '📎 Файл', AUDIO: '🎵 Аудио',
+  };
+  return (
+    <TouchableOpacity style={pbS.wrap} onPress={onPress} activeOpacity={0.8}>
+      <View style={pbS.accent} />
+      <View style={pbS.content}>
+        <Text style={pbS.label}>📌 Закреплённое</Text>
+        <Text style={pbS.text} numberOfLines={1}>{labels[pinned.type]}</Text>
+      </View>
+      <TouchableOpacity style={pbS.closeBtn} onPress={onUnpin} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <Icon name="x" size={14} color={colors.primary + '80'} />
+      </TouchableOpacity>
+    </TouchableOpacity>
+  );
+};
+const pbS = StyleSheet.create({
+  wrap:     { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.secondary + '25', borderBottomWidth: 1, borderBottomColor: colors.primary + '15', paddingVertical: 8, paddingHorizontal: 16, gap: 10 },
+  accent:   { width: 3, height: 34, borderRadius: 2, backgroundColor: colors.accent },
+  content:  { flex: 1 },
+  label:    { fontSize: 11, fontWeight: '700', color: colors.accent, marginBottom: 2 },
+  text:     { fontSize: 13, color: colors.text, lineHeight: 17 },
+  closeBtn: { width: 28, height: 28, borderRadius: 8, backgroundColor: colors.secondary + '40', alignItems: 'center', justifyContent: 'center' },
+});
+
+// ─── SearchBar ────────────────────────────────────────────────────────────────
+
+const SearchBar: React.FC<{
+  chatId: number;
+  onClose: () => void;
+  onGoTo: (msgId: number) => void;
+}> = ({ chatId, onClose, onGoTo }) => {
+  const [q, setQ] = useState('');
+  const { data: results, isFetching } = useSearchMessages(chatId, q);
+  return (
+    <View style={sbS.container}>
+      <View style={sbS.row}>
+        <Icon name="search" size={16} color={colors.primary + '70'} />
+        <TextInput style={sbS.input} placeholder="Поиск в чате..." placeholderTextColor={colors.primary + '50'} value={q} onChangeText={setQ} autoFocus />
+        {isFetching && <ActivityIndicator size="small" color={colors.accent} />}
+        <TouchableOpacity onPress={onClose}><Icon name="x" size={18} color={colors.primary + '80'} /></TouchableOpacity>
+      </View>
+      {results && results.length > 0 && (
+        <FlatList
+          data={results}
+          keyExtractor={(item) => String(item.id)}
+          style={sbS.list}
+          keyboardShouldPersistTaps="handled"
+          renderItem={({ item }) => (
+            <TouchableOpacity style={sbS.result} onPress={() => { onGoTo(item.id); onClose(); }}>
+              <Text style={sbS.sender}>{item.sender?.nickName}</Text>
+              <Text style={sbS.text} numberOfLines={1}>{item.content ?? '📎 Медиа'}</Text>
+            </TouchableOpacity>
+          )}
+        />
+      )}
+      {results?.length === 0 && q.trim().length > 1 && !isFetching && (
+        <Text style={sbS.empty}>Ничего не найдено</Text>
+      )}
+    </View>
+  );
+};
+const sbS = StyleSheet.create({
+  container: { backgroundColor: colors.background, borderBottomWidth: 1, borderBottomColor: colors.primary + '15' },
+  row:       { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 10 },
+  input:     { flex: 1, fontSize: 15, color: colors.text },
+  list:      { maxHeight: 220, borderTopWidth: 1, borderTopColor: colors.primary + '10' },
+  result:    { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.primary + '08' },
+  sender:    { fontSize: 11, fontWeight: '700', color: colors.accent, marginBottom: 2 },
+  text:      { fontSize: 13, color: colors.primary },
+  empty:     { paddingHorizontal: 16, paddingVertical: 12, fontSize: 13, color: colors.primary + '60' },
+});
+
+// ─── DeleteDialog ─────────────────────────────────────────────────────────────
+// "Удалить у всех" теперь доступна для ЛЮБОГО сообщения в 1:1 чате —
+// бэкенд это поддерживает, isOwn больше не проверяется.
+
+const DeleteDialog: React.FC<{
+  visible: boolean;
+  multiCount?: number;
+  onClose: () => void;
+  onDeleteSelf: () => void;
+  onDeleteAll: () => void;
+}> = ({ visible, multiCount, onClose, onDeleteSelf, onDeleteAll }) => {
+  const scaleAnim = useRef(new Animated.Value(0.88)).current;
+  const fadeAnim  = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, tension: 90, friction: 10 }),
+        Animated.timing(fadeAnim,  { toValue: 1, duration: 160, useNativeDriver: true }),
+      ]).start();
+    } else {
+      scaleAnim.setValue(0.88);
+      fadeAnim.setValue(0);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
+
+  if (!visible) return null;
+  const label = multiCount && multiCount > 1 ? `${multiCount} сообщ.` : 'сообщение';
+
+  return (
+    <Modal transparent animationType="none" visible={visible} onRequestClose={onClose}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <Animated.View style={[ddS.backdrop, { opacity: fadeAnim }]}>
+          <TouchableWithoutFeedback>
+            <Animated.View style={[ddS.card, { opacity: fadeAnim, transform: [{ scale: scaleAnim }] }]}>
+
+              <View style={ddS.iconWrap}>
+                <Icon name="trash-2" size={30} color="#ff453a" />
+              </View>
+              <Text style={ddS.title}>Удалить {label}?</Text>
+
+              {/* Удалить у всех — главная, всегда первая */}
+              <TouchableOpacity style={ddS.rowAll} onPress={onDeleteAll} activeOpacity={0.82}>
+                <View style={[ddS.rowIcon, { backgroundColor: '#ff453a' }]}>
+                  <Icon name="users" size={16} color="#fff" />
+                </View>
+                <View style={ddS.rowText}>
+                  <Text style={ddS.rowTitleAll}>Удалить у всех</Text>
+                  <Text style={ddS.rowSub}>Пропадёт у обоих участников</Text>
+                </View>
+                <Icon name="chevron-right" size={16} color="#ff453a" style={{ opacity: 0.7 }} />
+              </TouchableOpacity>
+
+              {/* Удалить у себя — вторичная */}
+              <TouchableOpacity style={ddS.rowSelf} onPress={onDeleteSelf} activeOpacity={0.82}>
+                <View style={[ddS.rowIcon, { backgroundColor: colors.secondary + '90' }]}>
+                  <Icon name="user" size={16} color={colors.primary} />
+                </View>
+                <View style={ddS.rowText}>
+                  <Text style={ddS.rowTitleSelf}>Удалить у себя</Text>
+                  <Text style={ddS.rowSub}>Только вы не увидите</Text>
+                </View>
+                <Icon name="chevron-right" size={16} color={colors.primary} style={{ opacity: 0.4 }} />
+              </TouchableOpacity>
+
+              <TouchableOpacity style={ddS.cancel} onPress={onClose} activeOpacity={0.8}>
+                <Text style={ddS.cancelText}>Отмена</Text>
+              </TouchableOpacity>
+            </Animated.View>
+          </TouchableWithoutFeedback>
+        </Animated.View>
+      </TouchableWithoutFeedback>
+    </Modal>
+  );
+};
+const ddS = StyleSheet.create({
+  backdrop:     { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 26 },
+  card:         { backgroundColor: colors.background, borderRadius: 26, borderWidth: 1, borderColor: colors.primary + '1A', padding: 20, width: '100%', maxWidth: 340, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.4, shadowRadius: 28, elevation: 16 },
+  iconWrap:     { width: 68, height: 68, borderRadius: 22, backgroundColor: 'rgba(255,69,58,0.12)', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  title:        { fontSize: 17, fontWeight: '700', color: colors.text, marginBottom: 20, textAlign: 'center' },
+  rowAll:       { flexDirection: 'row', alignItems: 'center', gap: 12, width: '100%', paddingVertical: 14, paddingHorizontal: 14, backgroundColor: 'rgba(255,69,58,0.1)', borderRadius: 16, marginBottom: 10, borderWidth: 1, borderColor: 'rgba(255,69,58,0.28)' },
+  rowSelf:      { flexDirection: 'row', alignItems: 'center', gap: 12, width: '100%', paddingVertical: 14, paddingHorizontal: 14, backgroundColor: colors.secondary + '28', borderRadius: 16, marginBottom: 14, borderWidth: 1, borderColor: colors.primary + '12' },
+  rowIcon:      { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  rowText:      { flex: 1 },
+  rowTitleAll:  { fontSize: 14, fontWeight: '700', color: '#ff453a' },
+  rowTitleSelf: { fontSize: 14, fontWeight: '600', color: colors.text },
+  rowSub:       { fontSize: 11, color: colors.primary + '65', marginTop: 2 },
+  cancel:       { width: '100%', paddingVertical: 13, alignItems: 'center', borderRadius: 14, backgroundColor: colors.secondary + '22', borderWidth: 1, borderColor: colors.primary + '0E' },
+  cancelText:   { fontSize: 14, fontWeight: '600', color: colors.primary + 'A0' },
+});
+
+// ─── ForwardPicker ────────────────────────────────────────────────────────────
+// Bottomsheet со списком чатов для выбора куда переслать сообщение(я).
+
+const ForwardPicker: React.FC<{
+  visible: boolean;
+  myId: number;
+  onClose: () => void;
+  onSelect: (chatId: number) => void;
+}> = ({ visible, myId, onClose, onSelect }) => {
+  const { data: chats, isLoading } = useChats();
+  const slideY = useRef(new Animated.Value(400)).current;
+  const fade   = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.spring(slideY, { toValue: 0, useNativeDriver: true, tension: 75, friction: 12 }),
+        Animated.timing(fade,   { toValue: 1, duration: 200, useNativeDriver: true }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(slideY, { toValue: 400, duration: 220, useNativeDriver: true }),
+        Animated.timing(fade,   { toValue: 0,   duration: 180, useNativeDriver: true }),
+      ]).start();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
+
+  if (!visible) return null;
+
+  return (
+    <Modal transparent animationType="none" visible={visible} onRequestClose={onClose}>
+      {/* dimmer */}
+      <TouchableWithoutFeedback onPress={onClose}>
+        <Animated.View style={[fpS.backdrop, { opacity: fade }]} />
+      </TouchableWithoutFeedback>
+
+      {/* sheet */}
+      <Animated.View style={[fpS.sheet, { transform: [{ translateY: slideY }] }]}>
+        <View style={fpS.handle} />
+        <View style={fpS.header}>
+          <Text style={fpS.title}>Переслать в чат</Text>
+          <TouchableOpacity style={fpS.closeBtn} onPress={onClose}>
+            <Icon name="x" size={18} color={colors.text} />
+          </TouchableOpacity>
+        </View>
+
+        {isLoading ? (
+          <View style={fpS.center}><ActivityIndicator color={colors.accent} size="large" /></View>
+        ) : !chats?.length ? (
+          <View style={fpS.center}><Text style={fpS.emptyText}>Нет доступных чатов</Text></View>
+        ) : (
+          <FlatList
+            data={chats}
+            keyExtractor={(item) => String(item.id)}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingBottom: Platform.OS === 'ios' ? 36 : 16 }}
+            renderItem={({ item }) => {
+              const other    = getOtherParticipant(item, myId);
+              if (!other) return null;
+              const initials = other.nickName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+              const preview  = item.messages?.[0];
+              return (
+                <TouchableOpacity
+                  style={fpS.row}
+                  onPress={() => { onSelect(item.id); onClose(); }}
+                  activeOpacity={0.72}
+                >
+                  {other.avatarUrl
+                    ? <Image source={{ uri: other.avatarUrl }} style={fpS.avatar} />
+                    : <View style={fpS.avatarPh}><Text style={fpS.avatarIn}>{initials}</Text></View>}
+                  <View style={fpS.info}>
+                    <Text style={fpS.name} numberOfLines={1}>{other.nickName}</Text>
+                    {preview && (
+                      <Text style={fpS.preview} numberOfLines={1}>
+                        {preview.content ?? '📎 Медиа'}
+                      </Text>
+                    )}
+                  </View>
+                  <View style={fpS.sendBtn}>
+                    <Icon name="send" size={15} color="#fff" />
+                  </View>
+                </TouchableOpacity>
+              );
+            }}
+          />
+        )}
+      </Animated.View>
+    </Modal>
+  );
+};
+const fpS = StyleSheet.create({
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)' },
+  sheet:    { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: colors.background, borderTopLeftRadius: 28, borderTopRightRadius: 28, borderTopWidth: 1, borderLeftWidth: 1, borderRightWidth: 1, borderColor: colors.primary + '1E', maxHeight: '72%' },
+  handle:   { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.primary + '40', alignSelf: 'center', marginTop: 10 },
+  header:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 14, paddingBottom: 10 },
+  title:    { fontSize: 18, fontWeight: '700', color: colors.text },
+  closeBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: colors.secondary + '40', alignItems: 'center', justifyContent: 'center' },
+  center:   { paddingVertical: 48, alignItems: 'center' },
+  emptyText:{ fontSize: 14, color: colors.primary + '60' },
+  row:      { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, gap: 12, borderBottomWidth: 1, borderBottomColor: colors.primary + '0C' },
+  avatar:   { width: 48, height: 48, borderRadius: 24, borderWidth: 2, borderColor: colors.accent + '50' },
+  avatarPh: { width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondary + '60', borderWidth: 2, borderColor: colors.accent + '30', alignItems: 'center', justifyContent: 'center' },
+  avatarIn: { fontSize: 16, fontWeight: '700', color: colors.text },
+  info:     { flex: 1 },
+  name:     { fontSize: 15, fontWeight: '700', color: colors.text },
+  preview:  { fontSize: 12, color: colors.primary + '60', marginTop: 2 },
+  sendBtn:  { width: 38, height: 38, borderRadius: 11, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+});
+
+// ─── TapActionSheet ───────────────────────────────────────────────────────────
+
+interface TapSheetProps {
+  message: Message | null;
+  isOwn: boolean;
+  onClose: () => void;
+  onReact: (messageId: number, emoji: string) => void;
+  onReply: (msg: Message) => void;
+  onEdit: (msg: Message) => void;
+  onDeleteRequest: (msg: Message) => void;
+  onForwardRequest: (msg: Message) => void;
+  onPin: (msg: Message) => void;
+  onCopy: (msg: Message) => void;
+}
+
+const TapActionSheet: React.FC<TapSheetProps> = ({
+  message, isOwn, onClose, onReact, onReply, onEdit, onDeleteRequest, onForwardRequest, onPin, onCopy,
+}) => {
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const fadeAnim  = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (message) {
+      Animated.parallel([
+        Animated.spring(slideAnim, { toValue: 1, useNativeDriver: true, tension: 80, friction: 10 }),
+        Animated.timing(fadeAnim,  { toValue: 1, duration: 150, useNativeDriver: true }),
+      ]).start();
+    } else {
+      Animated.timing(fadeAnim, { toValue: 0, duration: 100, useNativeDriver: true }).start();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!message]);
+
+  if (!message) return null;
+
+  const existing = Array.isArray(message.reactions) ? message.reactions : [];
+  const actions = [
+    { icon: 'corner-up-left', label: 'Ответить',  color: colors.primary, onPress: () => { onReply(message); onClose(); } },
+    { icon: 'share-2',        label: 'Переслать', color: colors.primary, onPress: () => { onForwardRequest(message); onClose(); } },
+    ...(message.type === 'TEXT' ? [{ icon: 'copy', label: 'Копировать', color: colors.primary, onPress: () => { onCopy(message); onClose(); } }] : []),
+    { icon: 'bookmark',       label: 'Закрепить', color: colors.accent,  onPress: () => { onPin(message); onClose(); } },
+    ...(isOwn && message.type === 'TEXT' ? [{ icon: 'edit-2', label: 'Изменить', color: '#6ecfff', onPress: () => { onEdit(message); onClose(); } }] : []),
+    { icon: 'trash-2',        label: 'Удалить',   color: '#ff6b6b',      onPress: () => { onDeleteRequest(message); onClose(); } },
+  ];
+
+  return (
+    <Modal transparent animationType="none" visible={!!message} onRequestClose={onClose}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <Animated.View style={[tasS.backdrop, { opacity: fadeAnim }]}>
+          <TouchableWithoutFeedback>
+            <Animated.View style={[
+              tasS.sheet,
+              {
+                opacity: fadeAnim,
+                transform: [
+                  { scale: slideAnim.interpolate({ inputRange: [0, 1], outputRange: [0.88, 1] }) },
+                  { translateY: slideAnim.interpolate({ inputRange: [0, 1], outputRange: [30, 0] }) },
+                ],
+              },
+            ]}>
+              <View style={tasS.emojiRow}>
+                {QUICK_REACTIONS.map((emoji) => {
+                  const selected = existing.some((r) => r.emoji === emoji);
+                  return (
+                    <TouchableOpacity
+                      key={emoji}
+                      style={[tasS.emojiBtn, selected && tasS.emojiBtnSel]}
+                      onPress={() => { onReact(message.id, emoji); onClose(); }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={tasS.emoji}>{emoji}</Text>
+                      {selected && <View style={tasS.selDot} />}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <View style={tasS.preview}>
+                <Text style={tasS.previewSender}>{message.sender?.nickName ?? ''}</Text>
+                <Text style={tasS.previewText} numberOfLines={2}>
+                  {message.type !== 'TEXT'
+                    ? ({ IMAGE: '🖼 Фото', VIDEO: '🎥 Видео', FILE: '📎 Файл', AUDIO: '🎵 Аудио' } as Record<string, string>)[message.type] ?? '📎'
+                    : (message.content ?? '')}
+                </Text>
+              </View>
+
+              {actions.map((a) => (
+                <TouchableOpacity key={a.label} style={tasS.row} onPress={a.onPress} activeOpacity={0.7}>
+                  <Icon name={a.icon as any} size={16} color={a.color + '90'} />
+                  <Text style={[tasS.rowText, { color: a.color }]}>{a.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </Animated.View>
+          </TouchableWithoutFeedback>
+        </Animated.View>
+      </TouchableWithoutFeedback>
+    </Modal>
+  );
+};
+const tasS = StyleSheet.create({
+  backdrop:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
+  sheet:       { backgroundColor: colors.background, borderRadius: 20, borderWidth: 1, borderColor: colors.primary + '20', padding: 16, width: '100%', maxWidth: 360, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 20, elevation: 10 },
+  emojiRow:    { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
+  emojiBtn:    { width: 44, height: 44, borderRadius: 14, backgroundColor: colors.secondary + '30', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.primary + '10' },
+  emojiBtnSel: { backgroundColor: colors.accent + '30', borderColor: colors.accent + '80' },
+  emoji:       { fontSize: 24 },
+  selDot:      { position: 'absolute', bottom: 4, right: 4, width: 6, height: 6, borderRadius: 3, backgroundColor: colors.accent },
+  preview:     { backgroundColor: colors.secondary + '25', borderRadius: 12, padding: 10, marginBottom: 8, borderLeftWidth: 3, borderLeftColor: colors.accent },
+  previewSender:{ fontSize: 12, fontWeight: '700', color: colors.accent, marginBottom: 2 },
+  previewText: { fontSize: 13, color: colors.primary, lineHeight: 18 },
+  row:         { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, paddingHorizontal: 4, borderTopWidth: 1, borderTopColor: colors.primary + '10' },
+  rowText:     { fontSize: 14, fontWeight: '600' },
+});
+
+// ─── ComposeBanner ────────────────────────────────────────────────────────────
+
+const ComposeBanner: React.FC<{
+  mode: 'reply' | 'edit';
+  message: Message;
+  onCancel: () => void;
+}> = ({ mode, message, onCancel }) => (
+  <View style={cbS.wrap}>
+    <View style={cbS.accent} />
+    <View style={cbS.content}>
+      <Text style={cbS.label}>{mode === 'reply' ? `↩ Ответить ${message.sender?.nickName}` : '✏️ Редактировать'}</Text>
+      <Text style={cbS.text} numberOfLines={1}>
+        {message.type !== 'TEXT'
+          ? ({ IMAGE: '🖼 Фото', VIDEO: '🎥 Видео', FILE: '📎 Файл', AUDIO: '🎵 Аудио' } as Record<string, string>)[message.type] ?? '📎'
+          : (message.content ?? '')}
+      </Text>
+    </View>
+    <TouchableOpacity style={cbS.close} onPress={onCancel} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+      <Icon name="x" size={16} color={colors.primary + '80'} />
+    </TouchableOpacity>
+  </View>
+);
+const cbS = StyleSheet.create({
+  wrap:    { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.secondary + '20', borderTopWidth: 1, borderTopColor: colors.primary + '15', paddingHorizontal: 16, paddingVertical: 8, gap: 10 },
+  accent:  { width: 3, height: 34, borderRadius: 2, backgroundColor: colors.accent },
+  content: { flex: 1 },
+  label:   { fontSize: 11, fontWeight: '700', color: colors.accent, marginBottom: 2 },
+  text:    { fontSize: 13, color: colors.primary, lineHeight: 17 },
+  close:   { width: 28, height: 28, borderRadius: 8, backgroundColor: colors.secondary + '40', alignItems: 'center', justifyContent: 'center' },
+});
+
+// ─── ForwardedBubble ──────────────────────────────────────────────────────────
+
+const ForwardedBubble: React.FC<{ message: Message; isOwn: boolean }> = ({ message, isOwn }) => {
+  const fw = message.forwardedFrom;
+  if (!fw) return null;
+  return (
+    <View style={[fwS.wrap, isOwn && fwS.wrapOwn]}>
+      <View style={fwS.accent} />
+      <View style={fwS.content}>
+        <Text style={fwS.sender}>{fw.sender?.nickName}</Text>
+        <Text style={fwS.text} numberOfLines={2}>
+          {fw.type !== 'TEXT'
+            ? ({ IMAGE: '🖼 Фото', VIDEO: '🎥 Видео', FILE: '📎 Файл', AUDIO: '🎵 Аудио' } as Record<string, string>)[fw.type] ?? '📎'
+            : (fw.content ?? '')}
+        </Text>
+      </View>
+    </View>
+  );
+};
+const fwS = StyleSheet.create({
+  wrap:    { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 10, marginBottom: 6, overflow: 'hidden' },
+  wrapOwn: { backgroundColor: 'rgba(0,0,0,0.12)' },
+  accent:  { width: 3, backgroundColor: colors.accent },
+  content: { flex: 1, paddingHorizontal: 8, paddingVertical: 5 },
+  sender:  { fontSize: 11, fontWeight: '700', color: colors.accent, marginBottom: 2 },
+  text:    { fontSize: 12, color: colors.text + 'CC', lineHeight: 16 },
+});
+
+// ─── MessageBubble ────────────────────────────────────────────────────────────
 
 interface BubbleProps {
   message: Message;
   isOwn: boolean;
   showAvatar: boolean;
+  isSelected: boolean;
+  isSelectMode: boolean;
+  /** true когда это сообщение надо подсветить (переход от закреплённого) */
+  isHighlighted: boolean;
+  onTap: (msg: Message) => void;
   onLongPress: (msg: Message) => void;
   onReact: (messageId: number, emoji: string) => void;
 }
 
 const MessageBubble: React.FC<BubbleProps> = React.memo(
-  ({ message, isOwn, showAvatar, onLongPress, onReact }) => {
-    const initials = (message.sender?.nickName ?? '?')
-      .split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
-
-    const time = new Date(message.createdAt).toLocaleTimeString('ru-RU', {
-      hour: '2-digit', minute: '2-digit',
-    });
-
+  ({ message, isOwn, showAvatar, isSelected, isSelectMode, isHighlighted, onTap, onLongPress, onReact }) => {
+    const initials  = (message.sender?.nickName ?? '?').split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+    const time      = new Date(message.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    const isEdited  = message.updatedAt !== message.createdAt;
     const reactions = Array.isArray(message.reactions) ? message.reactions : [];
-    const grouped = reactions.reduce<Record<string, number>>((acc, r) => {
-      acc[r.emoji] = (acc[r.emoji] ?? 0) + 1;
-      return acc;
-    }, {});
+    const grouped   = reactions.reduce<Record<string, number>>((acc, r) => { acc[r.emoji] = (acc[r.emoji] ?? 0) + 1; return acc; }, {});
 
-    // ── Media preview ─────────────────────────────────────────────────────────
-    const renderMedia = () => {
-      const url = message.mediaUrl ?? message.content;
+    // ── Анимация подсветки при переходе к закреплённому сообщению ─────────
+    const flashAnim = useRef(new Animated.Value(0)).current;
+    useEffect(() => {
+      if (!isHighlighted) return;
+      // 3 мигания, затем плавное затухание
+      flashAnim.setValue(0);
+      Animated.sequence([
+        Animated.timing(flashAnim, { toValue: 1, duration: 180, useNativeDriver: false }),
+        Animated.timing(flashAnim, { toValue: 0, duration: 180, useNativeDriver: false }),
+        Animated.timing(flashAnim, { toValue: 1, duration: 180, useNativeDriver: false }),
+        Animated.timing(flashAnim, { toValue: 0, duration: 180, useNativeDriver: false }),
+        Animated.timing(flashAnim, { toValue: 1, duration: 180, useNativeDriver: false }),
+        Animated.timing(flashAnim, { toValue: 0, duration: 700, useNativeDriver: false }),
+      ]).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isHighlighted]);
+
+    const rowBg = isSelected
+      ? colors.accent + '22'
+      : flashAnim.interpolate({ inputRange: [0, 1], outputRange: ['transparent', colors.accent + '35'] });
+
+    const renderContent = () => {
+      const url = (message as any).mediaUrl ?? message.content;
       switch (message.type) {
         case 'IMAGE':
           return (
             <TouchableOpacity onPress={() => url && Linking.openURL(url)} activeOpacity={0.9}>
-              <Image source={{ uri: url ?? '' }} style={bubbleStyles.mediaImage} resizeMode="cover" />
+              <Image source={{ uri: url ?? '' }} style={bS.mediaImg} resizeMode="cover" />
             </TouchableOpacity>
           );
         case 'VIDEO':
           return (
-            <TouchableOpacity
-              style={bubbleStyles.mediaFile}
-              onPress={() => url && Linking.openURL(url)}
-              activeOpacity={0.8}
-            >
+            <TouchableOpacity style={bS.mediaRow} onPress={() => url && Linking.openURL(url)}>
               <Icon name="video" size={20} color={isOwn ? colors.text : colors.primary} />
-              <Text style={[bubbleStyles.mediaFileText, isOwn && { color: colors.text }]}>
-                Видео
-              </Text>
+              <Text style={[bS.mediaText, isOwn && { color: colors.text }]}>Видео</Text>
             </TouchableOpacity>
           );
         case 'AUDIO':
           return (
-            <TouchableOpacity
-              style={bubbleStyles.mediaFile}
-              onPress={() => url && Linking.openURL(url)}
-              activeOpacity={0.8}
-            >
+            <TouchableOpacity style={bS.mediaRow} onPress={() => url && Linking.openURL(url)}>
               <Icon name="mic" size={20} color={isOwn ? colors.text : colors.primary} />
-              <Text style={[bubbleStyles.mediaFileText, isOwn && { color: colors.text }]}>
-                Аудио
-              </Text>
+              <Text style={[bS.mediaText, isOwn && { color: colors.text }]}>Аудио</Text>
             </TouchableOpacity>
           );
         case 'FILE':
           return (
-            <TouchableOpacity
-              style={bubbleStyles.mediaFile}
-              onPress={() => url && Linking.openURL(url)}
-              activeOpacity={0.8}
-            >
+            <TouchableOpacity style={bS.mediaRow} onPress={() => url && Linking.openURL(url)}>
               <Icon name="paperclip" size={20} color={isOwn ? colors.text : colors.primary} />
-              <Text style={[bubbleStyles.mediaFileText, isOwn && { color: colors.text }]}>
-                {message.content ?? 'Файл'}
-              </Text>
+              <Text style={[bS.mediaText, isOwn && { color: colors.text }]}>{message.content ?? 'Файл'}</Text>
             </TouchableOpacity>
           );
         default:
-          return (
-            <Text style={[bubbleStyles.text, isOwn && bubbleStyles.textOwn]}>
-              {message.content ?? ''}
-            </Text>
-          );
+          return <Text style={[bS.text, isOwn && bS.textOwn]}>{message.content ?? ''}</Text>;
       }
     };
 
     return (
-      <View style={[bubbleStyles.row, isOwn ? bubbleStyles.rowOwn : bubbleStyles.rowOther]}>
-        {!isOwn && (
-          <View style={bubbleStyles.avatarCol}>
-            {showAvatar ? (
-              message.sender?.avatarUrl ? (
-                <Image source={{ uri: message.sender.avatarUrl }} style={bubbleStyles.avatar} />
-              ) : (
-                <View style={bubbleStyles.avatarPlaceholder}>
-                  <Text style={bubbleStyles.avatarInitials}>{initials}</Text>
-                </View>
-              )
-            ) : (
-              <View style={bubbleStyles.avatarSpacer} />
-            )}
-          </View>
-        )}
-
-        <View style={[bubbleStyles.column, isOwn && bubbleStyles.columnOwn]}>
-          <TouchableOpacity
-            onLongPress={() => onLongPress(message)}
-            activeOpacity={0.85}
-            style={[bubbleStyles.bubble, isOwn ? bubbleStyles.bubbleOwn : bubbleStyles.bubbleOther]}
-          >
-            {renderMedia()}
-            <Text style={[bubbleStyles.time, isOwn && bubbleStyles.timeOwn]}>{time}</Text>
-          </TouchableOpacity>
-
-          {Object.keys(grouped).length > 0 && (
-            <View style={[bubbleStyles.reactionsRow, isOwn && bubbleStyles.reactionsRowOwn]}>
-              {Object.entries(grouped).map(([emoji, count]) => (
-                <TouchableOpacity
-                  key={emoji}
-                  style={bubbleStyles.reactionChip}
-                  onPress={() => onReact(message.id, emoji)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={bubbleStyles.reactionEmoji}>{emoji}</Text>
-                  {count > 1 && <Text style={bubbleStyles.reactionCount}>{count}</Text>}
-                </TouchableOpacity>
-              ))}
+      // Pressable отпускает responder при pan → FlatList скроллится в любом режиме
+      <Pressable
+        onPress={() => onTap(message)}
+        onLongPress={() => onLongPress(message)}
+        delayLongPress={250}
+        unstable_pressDelay={isSelectMode ? 0 : 80}
+        android_disableSound
+      >
+        <Animated.View style={[
+          bS.row,
+          isOwn ? bS.rowOwn : bS.rowOther,
+          { backgroundColor: rowBg as any },
+        ]}>
+          {isSelectMode && (
+            <View style={[bS.check, isSelected && bS.checkActive]}>
+              {isSelected && <Icon name="check" size={11} color={colors.text} />}
             </View>
           )}
-        </View>
-      </View>
+
+          {!isOwn && (
+            <View style={bS.avatarCol}>
+              {showAvatar
+                ? message.sender?.avatarUrl
+                  ? <Image source={{ uri: message.sender.avatarUrl }} style={bS.avatar} />
+                  : <View style={bS.avatarPh}><Text style={bS.avatarIn}>{initials}</Text></View>
+                : <View style={bS.avatarSpacer} />}
+            </View>
+          )}
+
+          <View style={[bS.col, isOwn && bS.colOwn]}>
+            <View style={[bS.bubble, isOwn ? bS.bubbleOwn : bS.bubbleOther]}>
+              {message.forwardedFrom && <ForwardedBubble message={message} isOwn={isOwn} />}
+              {renderContent()}
+              <View style={bS.meta}>
+                {isEdited && <Text style={[bS.edited, isOwn && bS.editedOwn]}>изм.</Text>}
+                <Text style={[bS.time, isOwn && bS.timeOwn]}>{time}</Text>
+              </View>
+            </View>
+
+            {Object.keys(grouped).length > 0 && (
+              <View style={[bS.reactRow, isOwn && bS.reactRowOwn]}>
+                {Object.entries(grouped).map(([emoji, count]) => (
+                  <TouchableOpacity
+                    key={emoji}
+                    style={bS.reactChip}
+                    onPress={() => onReact(message.id, emoji)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={bS.reactEmoji}>{emoji}</Text>
+                    {count > 1 && <Text style={bS.reactCount}>{count}</Text>}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        </Animated.View>
+      </Pressable>
     );
   },
 );
 
-const bubbleStyles = StyleSheet.create({
-  row: { flexDirection: 'row', marginVertical: 2, paddingHorizontal: 12 },
-  rowOwn: { justifyContent: 'flex-end' },
-  rowOther: { justifyContent: 'flex-start' },
-  avatarCol: { width: 34, marginRight: 8, alignSelf: 'flex-end', marginBottom: 4 },
-  avatar: { width: 34, height: 34, borderRadius: 17 },
-  avatarPlaceholder: {
-    width: 34, height: 34, borderRadius: 17,
-    backgroundColor: colors.secondary + '60', alignItems: 'center', justifyContent: 'center',
-  },
-  avatarInitials: { fontSize: 11, fontWeight: '700', color: colors.text },
-  avatarSpacer: { width: 34 },
-  column: { maxWidth: '75%', alignItems: 'flex-start' },
-  columnOwn: { alignItems: 'flex-end' },
-  bubble: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, marginBottom: 2, overflow: 'hidden' },
-  bubbleOwn: { backgroundColor: colors.accent, borderBottomRightRadius: 4 },
-  bubbleOther: {
-    backgroundColor: colors.secondary + '35', borderBottomLeftRadius: 4,
-    borderWidth: 1, borderColor: colors.primary + '20',
-  },
-  text: { fontSize: 15, color: colors.primary, lineHeight: 21, paddingHorizontal: 2 },
-  textOwn: { color: colors.text },
-  time: { fontSize: 11, color: colors.primary + '60', marginTop: 5, textAlign: 'right', paddingHorizontal: 2 },
-  timeOwn: { color: colors.text + 'AA' },
-  mediaImage: { width: 220, height: 160, borderRadius: 12, marginBottom: 4 },
-  mediaFile: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 4, paddingVertical: 4,
-  },
-  mediaFileText: { fontSize: 14, color: colors.primary, fontWeight: '500', flexShrink: 1 },
-  reactionsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 },
-  reactionsRowOwn: { justifyContent: 'flex-end' },
-  reactionChip: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: colors.secondary + '40', borderRadius: 10,
-    paddingHorizontal: 7, paddingVertical: 3,
-    borderWidth: 1, borderColor: colors.primary + '25',
-  },
-  reactionEmoji: { fontSize: 14 },
-  reactionCount: { fontSize: 11, color: colors.primary, marginLeft: 3, fontWeight: '600' },
+const bS = StyleSheet.create({
+  row:         { flexDirection: 'row', marginVertical: 2, paddingHorizontal: 12, alignItems: 'flex-end' },
+  rowOwn:      { justifyContent: 'flex-end' },
+  rowOther:    { justifyContent: 'flex-start' },
+  check:       { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: colors.primary + '50', alignItems: 'center', justifyContent: 'center', marginRight: 8, marginBottom: 6 },
+  checkActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  avatarCol:   { width: 34, marginRight: 8, alignSelf: 'flex-end', marginBottom: 4 },
+  avatar:      { width: 34, height: 34, borderRadius: 17 },
+  avatarPh:    { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.secondary + '60', alignItems: 'center', justifyContent: 'center' },
+  avatarIn:    { fontSize: 11, fontWeight: '700', color: colors.text },
+  avatarSpacer:{ width: 34 },
+  col:         { maxWidth: '75%', alignItems: 'flex-start' },
+  colOwn:      { alignItems: 'flex-end' },
+  bubble:      { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, marginBottom: 2, overflow: 'hidden' },
+  bubbleOwn:   { backgroundColor: colors.accent, borderBottomRightRadius: 4 },
+  bubbleOther: { backgroundColor: colors.secondary + '35', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: colors.primary + '20' },
+  text:        { fontSize: 15, color: colors.primary, lineHeight: 21, paddingHorizontal: 2 },
+  textOwn:     { color: colors.text },
+  meta:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4, marginTop: 4, paddingHorizontal: 2 },
+  time:        { fontSize: 11, color: colors.primary + '60' },
+  timeOwn:     { color: colors.text + 'AA' },
+  edited:      { fontSize: 10, color: colors.primary + '50', fontStyle: 'italic' },
+  editedOwn:   { color: colors.text + '80' },
+  mediaImg:    { width: 220, height: 160, borderRadius: 12, marginBottom: 4 },
+  mediaRow:    { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 4, paddingVertical: 4 },
+  mediaText:   { fontSize: 14, color: colors.primary, fontWeight: '500', flexShrink: 1 },
+  reactRow:    { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 },
+  reactRowOwn: { justifyContent: 'flex-end' },
+  reactChip:   { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.secondary + '40', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 3, borderWidth: 1, borderColor: colors.primary + '25' },
+  reactEmoji:  { fontSize: 14 },
+  reactCount:  { fontSize: 11, color: colors.primary, marginLeft: 3, fontWeight: '600' },
 });
 
-// ─── Reaction picker ──────────────────────────────────────────────────────────
+// ─── MediaPickerSheet ─────────────────────────────────────────────────────────
 
-const ReactionPicker: React.FC<{
-  message: Message | null;
-  onReact: (messageId: number, emoji: string) => void;
-  onClose: () => void;
-}> = ({ message, onReact, onClose }) => (
-  <Modal transparent animationType="fade" visible={!!message} onRequestClose={onClose}>
-    <TouchableWithoutFeedback onPress={onClose}>
-      <View style={rpStyles.backdrop}>
-        <TouchableWithoutFeedback>
-          <View style={rpStyles.sheet}>
-            <Text style={rpStyles.hint}>Реакция</Text>
-            <View style={rpStyles.row}>
-              {QUICK_REACTIONS.map((emoji) => (
-                <TouchableOpacity
-                  key={emoji}
-                  style={rpStyles.btn}
-                  onPress={() => { if (message) onReact(message.id, emoji); onClose(); }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={rpStyles.emoji}>{emoji}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        </TouchableWithoutFeedback>
-      </View>
-    </TouchableWithoutFeedback>
-  </Modal>
-);
-
-const rpStyles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center' },
-  sheet: {
-    backgroundColor: colors.background, borderRadius: 24,
-    borderWidth: 1, borderColor: colors.primary + '20',
-    paddingVertical: 20, paddingHorizontal: 24, alignItems: 'center', gap: 14,
-  },
-  hint: { fontSize: 13, color: colors.primary + '70', fontWeight: '500' },
-  row: { flexDirection: 'row', gap: 6 },
-  btn: {
-    width: 48, height: 48, borderRadius: 14,
-    backgroundColor: colors.secondary + '30', alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: colors.primary + '15',
-  },
-  emoji: { fontSize: 26 },
-});
-
-// ─── Media picker sheet ───────────────────────────────────────────────────────
+type PickedFile = { uri: string; name: string; type: string; mediaType: 'IMAGE' | 'VIDEO' | 'FILE' | 'AUDIO' };
 
 const MediaPickerSheet: React.FC<{
   visible: boolean;
   onClose: () => void;
-  onPick: (file: { uri: string; name: string; type: string }) => void;
+  onPick: (f: PickedFile) => void;
 }> = ({ visible, onClose, onPick }) => {
-  const pick = async (action: () => Promise<void>) => {
-    onClose();
-    await action();
-  };
-
-  const pickImage = async () => {
-    const res = await launchImageLibrary({ mediaType: 'photo', quality: 1 });
-    const asset = res.assets?.[0];
-    if (asset?.uri)
-      onPick({ uri: asset.uri, name: asset.fileName ?? 'photo.jpg', type: asset.type ?? 'image/jpeg' });
-  };
-
-  const pickVideo = async () => {
-    const res = await launchImageLibrary({ mediaType: 'video' });
-    const asset = res.assets?.[0];
-    if (asset?.uri)
-      onPick({ uri: asset.uri, name: asset.fileName ?? 'video.mp4', type: asset.type ?? 'video/mp4' });
-  };
-
-  const pickCamera = async () => {
-    const res = await launchCamera({ mediaType: 'photo', quality: 1 });
-    const asset = res.assets?.[0];
-    if (asset?.uri)
-      onPick({ uri: asset.uri, name: asset.fileName ?? 'photo.jpg', type: asset.type ?? 'image/jpeg' });
-  };
-
-  const pickAudio = async () => {
-    const res = await DocumentPicker.pickSingle({ type: [DocumentPicker.types.audio] });
-    onPick({ uri: res.uri, name: res.name ?? 'audio', type: res.type ?? 'audio/mpeg' });
-  };
-
-  const pickFile = async () => {
-    const res = await DocumentPicker.pickSingle({ type: [DocumentPicker.types.allFiles] });
-    onPick({ uri: res.uri, name: res.name ?? 'file', type: res.type ?? 'application/octet-stream' });
-  };
-
-  const options: { icon: string; label: string; action: () => void; color: string }[] = [
-    { icon: 'image',    label: 'Фото',      action: () => pick(pickImage),  color: '#6ecfff' },
-    { icon: 'camera',   label: 'Камера',    action: () => pick(pickCamera), color: '#a0e4a0' },
-    { icon: 'video',    label: 'Видео',     action: () => pick(pickVideo),  color: '#ffb86c' },
-    { icon: 'mic',      label: 'Аудио',     action: () => pick(pickAudio),  color: colors.accent },
-    { icon: 'paperclip',label: 'Файл',      action: () => pick(pickFile),   color: '#d0aeff' },
+  const go = async (action: () => Promise<void>) => { onClose(); await action(); };
+  const pickImage  = async () => { const r = await launchImageLibrary({ mediaType: 'photo', quality: 1 }); const a = r.assets?.[0]; if (a?.uri) onPick({ uri: a.uri, name: a.fileName ?? 'photo.jpg', type: a.type ?? 'image/jpeg', mediaType: 'IMAGE' }); };
+  const pickVideo  = async () => { const r = await launchImageLibrary({ mediaType: 'video' }); const a = r.assets?.[0]; if (a?.uri) onPick({ uri: a.uri, name: a.fileName ?? 'video.mp4', type: a.type ?? 'video/mp4', mediaType: 'VIDEO' }); };
+  const pickCamera = async () => { const r = await launchCamera({ mediaType: 'photo', quality: 1 }); const a = r.assets?.[0]; if (a?.uri) onPick({ uri: a.uri, name: a.fileName ?? 'photo.jpg', type: a.type ?? 'image/jpeg', mediaType: 'IMAGE' }); };
+  const pickAudio  = async () => { const r = await DocumentPicker.pickSingle({ type: [DocumentPicker.types.audio] }); onPick({ uri: r.uri, name: r.name ?? 'audio', type: r.type ?? 'audio/mpeg', mediaType: 'AUDIO' }); };
+  const pickFile   = async () => { const r = await DocumentPicker.pickSingle({ type: [DocumentPicker.types.allFiles] }); onPick({ uri: r.uri, name: r.name ?? 'file', type: r.type ?? 'application/octet-stream', mediaType: 'FILE' }); };
+  const opts = [
+    { icon: 'image',     label: 'Фото',   action: () => go(pickImage),  color: '#6ecfff' },
+    { icon: 'camera',    label: 'Камера', action: () => go(pickCamera), color: '#a0e4a0' },
+    { icon: 'video',     label: 'Видео',  action: () => go(pickVideo),  color: '#ffb86c' },
+    { icon: 'mic',       label: 'Аудио',  action: () => go(pickAudio),  color: colors.accent },
+    { icon: 'paperclip', label: 'Файл',   action: () => go(pickFile),   color: '#d0aeff' },
   ];
-
   return (
     <Modal transparent visible={visible} animationType="slide" onRequestClose={onClose}>
-      <TouchableWithoutFeedback onPress={onClose}>
-        <View style={mpStyles.backdrop} />
-      </TouchableWithoutFeedback>
-      <View style={mpStyles.sheet}>
-        <View style={mpStyles.handle} />
-        <Text style={mpStyles.title}>Прикрепить</Text>
-        <View style={mpStyles.grid}>
-          {options.map((o) => (
-            <TouchableOpacity key={o.label} style={mpStyles.option} onPress={o.action} activeOpacity={0.7}>
-              <View style={[mpStyles.iconWrap, { backgroundColor: o.color + '25', borderColor: o.color + '60' }]}>
-                <Icon name={o.icon} size={24} color={o.color} />
+      <TouchableWithoutFeedback onPress={onClose}><View style={mpS.backdrop} /></TouchableWithoutFeedback>
+      <View style={mpS.sheet}>
+        <View style={mpS.handle} />
+        <Text style={mpS.title}>Прикрепить</Text>
+        <View style={mpS.grid}>
+          {opts.map((o) => (
+            <TouchableOpacity key={o.label} style={mpS.option} onPress={o.action} activeOpacity={0.7}>
+              <View style={[mpS.iconWrap, { backgroundColor: o.color + '25', borderColor: o.color + '60' }]}>
+                <Icon name={o.icon as any} size={24} color={o.color} />
               </View>
-              <Text style={mpStyles.optionLabel}>{o.label}</Text>
+              <Text style={mpS.optLabel}>{o.label}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -398,57 +762,75 @@ const MediaPickerSheet: React.FC<{
     </Modal>
   );
 };
-
-const mpStyles = StyleSheet.create({
+const mpS = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
-  sheet: {
-    backgroundColor: colors.background, borderTopLeftRadius: 28, borderTopRightRadius: 28,
-    borderWidth: 1, borderColor: colors.primary + '20',
-    paddingHorizontal: 24, paddingTop: 8,
-  },
-  handle: {
-    width: 40, height: 4, borderRadius: 2,
-    backgroundColor: colors.primary + '40', alignSelf: 'center', marginBottom: 16,
-  },
-  title: { fontSize: 17, fontWeight: '700', color: colors.text, marginBottom: 20 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
-  option: { alignItems: 'center', gap: 8, width: 60 },
-  iconWrap: {
-    width: 60, height: 60, borderRadius: 18,
-    borderWidth: 1.5, alignItems: 'center', justifyContent: 'center',
-  },
-  optionLabel: { fontSize: 12, fontWeight: '600', color: colors.primary, textAlign: 'center' },
+  sheet:    { backgroundColor: colors.background, borderTopLeftRadius: 28, borderTopRightRadius: 28, borderWidth: 1, borderColor: colors.primary + '20', paddingHorizontal: 24, paddingTop: 8 },
+  handle:   { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.primary + '40', alignSelf: 'center', marginBottom: 16 },
+  title:    { fontSize: 17, fontWeight: '700', color: colors.text, marginBottom: 20 },
+  grid:     { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
+  option:   { alignItems: 'center', gap: 8, width: 60 },
+  iconWrap: { width: 60, height: 60, borderRadius: 18, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  optLabel: { fontSize: 12, fontWeight: '600', color: colors.primary, textAlign: 'center' },
 });
 
-// ─── ChatScreen ───────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// ChatScreen
+// ══════════════════════════════════════════════════════════════════════════════
 
 const ChatScreen: React.FC = () => {
   const navigation = useNavigation();
-  const route = useRoute<RouteParams>();
+  const route      = useRoute<RouteParams>();
   const { chatId, otherUser } = route.params;
 
-  const { data: me } = useMe();
-  const { isOnline } = useUserOnlineStatus(otherUser.id);
-  const { messages, isLoading, sendMessage, reactToMessage, markRead } = useChatRoom(chatId);
+  const { data: me }  = useMe();
+  const { isOnline }  = useUserOnlineStatus(otherUser.id);
+  const { forwardToChat } = useForwardToChat();
+
+  const {
+    messages, pinnedMessage,
+    sendMessage, sendMedia, editMessage, deleteMessage,
+    reactToMessage, pinMessage, unpinMessage,
+  } = useChatRoom(chatId);
+
   const { typingUserIds, startTyping, stopTyping } = useTyping(chatId);
 
-  const [inputText, setInputText]           = useState('');
-  const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
+  // ── UI state ───────────────────────────────────────────────────────────────
+  const [inputText,          setInputText]          = useState('');
+  const [replyTo,            setReplyTo]            = useState<Message | null>(null);
+  const [editTarget,         setEditTarget]         = useState<Message | null>(null);
   const [mediaPickerVisible, setMediaPickerVisible] = useState(false);
-  const [uploading, setUploading]           = useState(false);
-  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [uploading,          setUploading]          = useState(false);
+  const [searchVisible,      setSearchVisible]      = useState(false);
+  const [tapMessage,         setTapMessage]         = useState<Message | null>(null);
+  const [deleteVisible,      setDeleteVisible]      = useState(false);
+  const [deleteTarget,       setDeleteTarget]       = useState<Message | Message[] | null>(null);
+  const [selectedIds,        setSelectedIds]        = useState<Set<number>>(new Set());
+  const [forwardQueue,       setForwardQueue]       = useState<Message[]>([]);
+  const [forwardPickerOpen,  setForwardPickerOpen]  = useState(false);
+  // ID сообщения для flash-подсветки (при переходе к закреплённому)
+  const [highlightedId,      setHighlightedId]      = useState<number | null>(null);
 
-  useEffect(() => { markRead(); }, [chatId]);
-  useEffect(() => { if (messages.length > 0) markRead(); }, [messages.length]);
+  const isSelectMode = selectedIds.size > 0;
+  const listRef      = useRef<FlatList>(null);
+  const typingTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // prefill edit
+  useEffect(() => { if (editTarget) setInputText(editTarget.content ?? ''); }, [editTarget]);
+
+  // ── derived ────────────────────────────────────────────────────────────────
+  const reversedMessages = messages.slice().reverse();
+
+  // ── send ──────────────────────────────────────────────────────────────────
   const handleSend = useCallback(() => {
     const text = inputText.trim();
     if (!text) return;
+    if (editTarget) { editMessage(editTarget.id, text); setEditTarget(null); setInputText(''); return; }
+    sendMessage(text, replyTo?.id);
     setInputText('');
-    sendMessage(text);
+    setReplyTo(null);
     stopTyping();
     if (typingTimer.current) clearTimeout(typingTimer.current);
-  }, [inputText, sendMessage, stopTyping]);
+  }, [inputText, editTarget, editMessage, sendMessage, replyTo, stopTyping]);
 
   const handleTextChange = useCallback((text: string) => {
     setInputText(text);
@@ -462,145 +844,289 @@ const ChatScreen: React.FC = () => {
     }
   }, [startTyping, stopTyping]);
 
-  const handleMediaPick = useCallback(async (file: { uri: string; name: string; type: string }) => {
+  const handleMediaPick = useCallback(async (file: PickedFile) => {
     setUploading(true);
     try {
-      const result = await uploadMedia(chatId, file);
-      // After upload, notify via socket using the returned URL as content
-      // and type if your backend's send_message supports it.
-      // Adjust this to match your backend's socket event signature:
-      sendMessage(result.url); // fallback — send URL as text if no type field
-    } catch (err) {
-      Alert.alert('Ошибка', 'Не удалось загрузить файл. Проверь подключение.');
+      await sendMedia(file, file.mediaType, replyTo?.id);
+      setReplyTo(null);
+    } catch {
+      Alert.alert('Ошибка', 'Не удалось загрузить файл');
     } finally {
       setUploading(false);
     }
-  }, [chatId, sendMessage]);
+  }, [sendMedia, replyTo]);
 
-  const reversedMessages = messages.slice().reverse();
+  // ── tap / longpress ───────────────────────────────────────────────────────
+  const handleTap = useCallback((msg: Message) => {
+    if (isSelectMode) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(msg.id)) next.delete(msg.id); else next.add(msg.id);
+        return next;
+      });
+    } else {
+      setTapMessage(msg);
+    }
+  }, [isSelectMode]);
 
+  const handleLongPress = useCallback((msg: Message) => {
+    setSelectedIds(new Set([msg.id]));
+  }, []);
+
+  const exitSelectMode = useCallback(() => setSelectedIds(new Set()), []);
+
+  // ── go to message + flash ────────────────────────────────────────────────
+  const handleGoToMessage = useCallback((msgId: number) => {
+    const idx = reversedMessages.findIndex((m) => m.id === msgId);
+    if (idx < 0) return;
+
+    listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+
+    // Задержка = время скролла, потом мигаем
+    setTimeout(() => {
+      setHighlightedId(msgId);
+      // Сбрасываем после завершения анимации (~1.6с)
+      setTimeout(() => setHighlightedId(null), 1_800);
+    }, 350);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reversedMessages]);
+
+  // ── delete ────────────────────────────────────────────────────────────────
+  const requestDelete = useCallback((target: Message | Message[]) => {
+    setDeleteTarget(target);
+    setDeleteVisible(true);
+  }, []);
+
+  const handleDeleteSelf = useCallback(() => {
+    setDeleteVisible(false);
+    if (!deleteTarget) return;
+    const msgs = Array.isArray(deleteTarget) ? deleteTarget : [deleteTarget];
+    msgs.forEach((m) => deleteMessage(m.id, false));
+    exitSelectMode();
+  }, [deleteTarget, deleteMessage, exitSelectMode]);
+
+  const handleDeleteAll = useCallback(() => {
+    setDeleteVisible(false);
+    if (!deleteTarget) return;
+    const msgs = Array.isArray(deleteTarget) ? deleteTarget : [deleteTarget];
+    msgs.forEach((m) => deleteMessage(m.id, true));
+    exitSelectMode();
+  }, [deleteTarget, deleteMessage, exitSelectMode]);
+
+  // ── forward ───────────────────────────────────────────────────────────────
+  // Открываем пикер с очередью сообщений для пересылки
+  const handleForwardRequest = useCallback((msg: Message) => {
+    setForwardQueue([msg]);
+    setForwardPickerOpen(true);
+  }, []);
+
+  const handleMultiForwardRequest = useCallback(() => {
+    const msgs = messages.filter((m) => selectedIds.has(m.id));
+    if (msgs.length === 0) return;
+    setForwardQueue(msgs);
+    setForwardPickerOpen(true);
+  }, [messages, selectedIds]);
+
+  // После выбора чата — пересылаем все сообщения из очереди
+  const handleForwardToChat = useCallback((targetChatId: number) => {
+    forwardQueue.forEach((m) => forwardToChat(targetChatId, m.id));
+    setForwardQueue([]);
+    exitSelectMode();
+  }, [forwardQueue, forwardToChat, exitSelectMode]);
+
+  // ── multiselect ───────────────────────────────────────────────────────────
+  const getSelected = useCallback(() => messages.filter((m) => selectedIds.has(m.id)), [messages, selectedIds]);
+
+  const handleMultiCopy = useCallback(() => {
+    const text = getSelected().filter((m) => m.type === 'TEXT' && m.content).map((m) => m.content!).join('\n');
+    if (text) Clipboard.setString(text);
+    exitSelectMode();
+  }, [getSelected, exitSelectMode]);
+
+  const handleMultiDelete = useCallback(() => requestDelete(getSelected()), [getSelected, requestDelete]);
+
+  // ── single actions ────────────────────────────────────────────────────────
+  const handlePin  = useCallback((msg: Message) => pinMessage(msg.id), [pinMessage]);
+  const handleCopy = useCallback((msg: Message) => { if (msg.content) Clipboard.setString(msg.content); }, []);
+  const cancelCompose = () => { setReplyTo(null); setEditTarget(null); setInputText(''); };
+
+  const otherInitials = otherUser.nickName.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+  const tapIsOwn      = !!me && !!tapMessage && Number(tapMessage.senderId) === Number(me.id);
+
+  // ── render message ────────────────────────────────────────────────────────
   const renderMessage = useCallback(
     ({ item, index }: { item: Message; index: number }) => {
-      const isOwn     = item.senderId === me?.id;
-      const nextItem  = reversedMessages[index - 1];
+      const isOwn      = Number(item.senderId) === Number(me?.id);
+      const nextItem   = reversedMessages[index - 1];
       const showAvatar = !isOwn && (!nextItem || nextItem.senderId !== item.senderId);
       return (
         <MessageBubble
           message={item}
           isOwn={isOwn}
           showAvatar={showAvatar}
-          onLongPress={setSelectedMessage}
+          isSelected={selectedIds.has(item.id)}
+          isSelectMode={isSelectMode}
+          isHighlighted={highlightedId === item.id}
+          onTap={handleTap}
+          onLongPress={handleLongPress}
           onReact={reactToMessage}
         />
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [me?.id, messages, reactToMessage],
+    [me?.id, messages, reactToMessage, selectedIds, isSelectMode, handleTap, handleLongPress, highlightedId],
   );
 
-  const otherInitials = otherUser.nickName
-    .split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
-
+  // ── render ────────────────────────────────────────────────────────────────
   return (
-    <View style={styles.container}>
-      {/* ── Header ── */}
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-          <Icon name="arrow-left" size={22} color={colors.text} />
-        </TouchableOpacity>
+    <View style={s.container}>
 
-        <View style={styles.headerInfo}>
-          <View style={styles.headerAvatarWrap}>
-            {otherUser.avatarUrl ? (
-              <Image source={{ uri: otherUser.avatarUrl }} style={styles.headerAvatar} />
-            ) : (
-              <View style={styles.headerAvatarPlaceholder}>
-                <Text style={styles.headerAvatarInitials}>{otherInitials}</Text>
+      {/* ── Header ─────────────────────────────────────────────────────── */}
+      <View style={s.header}>
+        {isSelectMode ? (
+          <>
+            <TouchableOpacity style={s.iconBtn} onPress={exitSelectMode}>
+              <Icon name="x" size={20} color={colors.text} />
+            </TouchableOpacity>
+            <Text style={s.selectCount}>{selectedIds.size} выбрано</Text>
+            <View style={s.selectActions}>
+              <TouchableOpacity style={s.iconBtn} onPress={handleMultiCopy}>
+                <Icon name="copy" size={18} color={colors.text + 'CC'} />
+              </TouchableOpacity>
+              <TouchableOpacity style={s.iconBtn} onPress={handleMultiForwardRequest}>
+                <Icon name="share-2" size={18} color={colors.text + 'CC'} />
+              </TouchableOpacity>
+              <TouchableOpacity style={s.iconBtn} onPress={handleMultiDelete}>
+                <Icon name="trash-2" size={18} color="#ff453a" />
+              </TouchableOpacity>
+            </View>
+          </>
+        ) : (
+          <>
+            <TouchableOpacity style={s.iconBtn} onPress={() => navigation.goBack()}>
+              <Icon name="arrow-left" size={22} color={colors.text} />
+            </TouchableOpacity>
+            <View style={s.headerInfo}>
+              <View style={s.avatarWrap}>
+                {otherUser.avatarUrl
+                  ? <Image source={{ uri: otherUser.avatarUrl }} style={s.headerAvatar} />
+                  : <View style={s.headerAvatarPh}><Text style={s.headerAvatarIn}>{otherInitials}</Text></View>}
+                {isOnline && <View style={s.onlineDot} />}
               </View>
-            )}
-            {isOnline && <View style={styles.headerOnlineDot} />}
-          </View>
-          <View style={styles.headerTextCol}>
-            <Text style={styles.headerName} numberOfLines={1}>{otherUser.nickName}</Text>
-            <Text style={[styles.headerStatus, isOnline && styles.headerStatusOnline]}>
-              {isOnline ? 'онлайн' : `@${otherUser.username}`}
-            </Text>
-          </View>
-        </View>
-
-        <View style={{ width: 40 }} />
+              <View style={s.headerTextCol}>
+                <Text style={s.headerName} numberOfLines={1}>{otherUser.nickName}</Text>
+                <Text style={[s.headerStatus, isOnline && s.headerStatusOnline]}>
+                  {isOnline ? 'онлайн' : `@${otherUser.username}`}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity style={s.iconBtn} onPress={() => setSearchVisible((v) => !v)}>
+              <Icon name={searchVisible ? 'x' : 'search'} size={19} color={colors.text + 'CC'} />
+            </TouchableOpacity>
+          </>
+        )}
       </View>
 
-      {/* ── Messages + input ── */}
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        {isLoading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={colors.accent} />
-          </View>
-        ) : (
-          <FlatList
-            data={reversedMessages}
-            keyExtractor={(item) => String(item.id)}
-            renderItem={renderMessage}
-            inverted
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.messagesList}
-            ListHeaderComponent={
-              typingUserIds.length > 0
-                ? <View style={{ paddingBottom: 4 }}><TypingIndicator /></View>
-                : null
-            }
+      {searchVisible && !isSelectMode && (
+        <SearchBar chatId={chatId} onClose={() => setSearchVisible(false)} onGoTo={handleGoToMessage} />
+      )}
+      {pinnedMessage && !searchVisible && !isSelectMode && (
+        <PinnedBanner
+          pinned={pinnedMessage}
+          onPress={() => handleGoToMessage(pinnedMessage.id)}
+          onUnpin={unpinMessage}
+        />
+      )}
+
+      {/* ── Messages + Input ─────────────────────────────────────────────── */}
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <FlatList
+          ref={listRef}
+          data={reversedMessages}
+          keyExtractor={(item) => String(item.id)}
+          renderItem={renderMessage}
+          inverted
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={s.msgList}
+          onScrollToIndexFailed={(info) => {
+            setTimeout(() => {
+              listRef.current?.scrollToIndex({ index: info.index, animated: true, viewPosition: 0.5 });
+            }, 100);
+          }}
+          ListHeaderComponent={
+            typingUserIds.length > 0
+              ? <View style={{ paddingBottom: 4 }}><TypingIndicator /></View>
+              : null
+          }
+        />
+
+        {(replyTo || editTarget) && !isSelectMode && (
+          <ComposeBanner
+            mode={editTarget ? 'edit' : 'reply'}
+            message={(editTarget ?? replyTo)!}
+            onCancel={cancelCompose}
           />
         )}
 
-        {/* ── Input bar ── */}
-        <View style={styles.inputBar}>
-          {/* Attach button */}
-          <TouchableOpacity
-            style={styles.attachBtn}
-            onPress={() => setMediaPickerVisible(true)}
-            disabled={uploading}
-            activeOpacity={0.8}
-          >
-            {uploading
-              ? <ActivityIndicator size="small" color={colors.accent} />
-              : <Icon name="paperclip" size={20} color={colors.primary + '90'} />}
-          </TouchableOpacity>
-
-          <View style={styles.inputWrap}>
-            <TextInput
-              value={inputText}
-              onChangeText={handleTextChange}
-              style={styles.input}
-              placeholder="Сообщение..."
-              placeholderTextColor={colors.primary + '50'}
-              multiline
-              maxLength={2_000}
-            />
+        {!isSelectMode && (
+          <View style={s.inputBar}>
+            <TouchableOpacity style={s.attachBtn} onPress={() => setMediaPickerVisible(true)} disabled={uploading} activeOpacity={0.8}>
+              {uploading
+                ? <ActivityIndicator size="small" color={colors.accent} />
+                : <Icon name="paperclip" size={20} color={colors.primary + '90'} />}
+            </TouchableOpacity>
+            <View style={s.inputWrap}>
+              <TextInput
+                value={inputText}
+                onChangeText={handleTextChange}
+                style={s.input}
+                placeholder={editTarget ? 'Редактировать...' : 'Сообщение...'}
+                placeholderTextColor={colors.primary + '50'}
+                multiline
+                maxLength={2_000}
+              />
+            </View>
+            <TouchableOpacity
+              style={[s.sendBtn, !inputText.trim() && s.sendBtnOff]}
+              onPress={handleSend}
+              disabled={!inputText.trim() || uploading}
+              activeOpacity={0.85}
+            >
+              <Icon name={editTarget ? 'check' : 'send'} size={18} color={inputText.trim() ? colors.text : colors.primary + '40'} />
+            </TouchableOpacity>
           </View>
-
-          <TouchableOpacity
-            style={[styles.sendBtn, !inputText.trim() && !uploading && styles.sendBtnDisabled]}
-            onPress={handleSend}
-            disabled={!inputText.trim() || uploading}
-            activeOpacity={0.85}
-          >
-            <Icon
-              name="send"
-              size={18}
-              color={inputText.trim() ? colors.text : colors.primary + '40'}
-            />
-          </TouchableOpacity>
-        </View>
+        )}
       </KeyboardAvoidingView>
 
-      <ReactionPicker
-        message={selectedMessage}
+      {/* ── Modals ────────────────────────────────────────────────────────── */}
+      <TapActionSheet
+        message={tapMessage}
+        isOwn={tapIsOwn}
+        onClose={() => setTapMessage(null)}
         onReact={reactToMessage}
-        onClose={() => setSelectedMessage(null)}
+        onReply={(msg) => { setReplyTo(msg); setEditTarget(null); }}
+        onEdit={(msg)  => { setEditTarget(msg); setReplyTo(null); }}
+        onDeleteRequest={requestDelete}
+        onForwardRequest={handleForwardRequest}
+        onPin={handlePin}
+        onCopy={handleCopy}
+      />
+
+      {/* DeleteDialog без isOwn — бэк разрешает «удалить у всех» для любого сообщения в 1:1 */}
+      <DeleteDialog
+        visible={deleteVisible}
+        multiCount={Array.isArray(deleteTarget) ? deleteTarget.length : undefined}
+        onClose={() => setDeleteVisible(false)}
+        onDeleteSelf={handleDeleteSelf}
+        onDeleteAll={handleDeleteAll}
+      />
+
+      {/* Пикер чата для пересылки */}
+      <ForwardPicker
+        visible={forwardPickerOpen}
+        myId={me?.id ?? 0}
+        onClose={() => { setForwardPickerOpen(false); setForwardQueue([]); }}
+        onSelect={handleForwardToChat}
       />
 
       <MediaPickerSheet
@@ -612,65 +1138,29 @@ const ChatScreen: React.FC = () => {
   );
 };
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  header: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingTop: Platform.OS === 'ios' ? 56 : 36,
-    paddingBottom: 14, paddingHorizontal: 16,
-    borderBottomWidth: 1, borderBottomColor: colors.primary + '15', gap: 12,
-  },
-  backBtn: {
-    width: 40, height: 40, borderRadius: 12,
-    backgroundColor: colors.secondary + '40', alignItems: 'center', justifyContent: 'center',
-  },
-  headerInfo: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerAvatarWrap: { position: 'relative' },
-  headerAvatar: { width: 40, height: 40, borderRadius: 20, borderWidth: 2, borderColor: colors.accent + '50' },
-  headerAvatarPlaceholder: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: colors.secondary + '60', borderWidth: 2, borderColor: colors.accent + '40',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  headerAvatarInitials: { fontSize: 13, fontWeight: '700', color: colors.text },
-  headerOnlineDot: {
-    position: 'absolute', bottom: 0, right: 0,
-    width: 11, height: 11, borderRadius: 5.5,
-    backgroundColor: colors.onlineColor, borderWidth: 2, borderColor: colors.background,
-  },
-  headerTextCol: { flex: 1 },
-  headerName: { fontSize: 16, fontWeight: '700', color: colors.text, letterSpacing: -0.2 },
-  headerStatus: { fontSize: 12, color: colors.primary + '60', marginTop: 1 },
-  headerStatusOnline: { color: colors.onlineColor, fontWeight: '600' },
-  loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  messagesList: { paddingVertical: 12, paddingBottom: 6 },
-  inputBar: {
-    flexDirection: 'row', alignItems: 'flex-end',
-    paddingHorizontal: 10, paddingVertical: 10,
-    paddingBottom: Platform.OS === 'ios' ? 28 : 10,
-    borderTopWidth: 1, borderTopColor: colors.primary + '12',
-    backgroundColor: colors.background, gap: 8,
-  },
-  attachBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  inputWrap: {
-    flex: 1, backgroundColor: colors.secondary + '30',
-    borderRadius: 22, borderWidth: 1.5, borderColor: colors.primary + '25',
-    paddingHorizontal: 16, paddingVertical: Platform.OS === 'ios' ? 10 : 6,
-    maxHeight: 120,
-  },
-  input: { color: colors.text, fontSize: 15, lineHeight: 20 },
-  sendBtn: {
-    width: 44, height: 44, borderRadius: 22, backgroundColor: colors.accent,
-    alignItems: 'center', justifyContent: 'center',
-    shadowColor: colors.accent, shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3, shadowRadius: 8, elevation: 6,
-  },
-  sendBtnDisabled: { backgroundColor: colors.secondary + '40', shadowOpacity: 0, elevation: 0 },
+const s = StyleSheet.create({
+  container:         { flex: 1, backgroundColor: colors.background },
+  header:            { flexDirection: 'row', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 56 : 36, paddingBottom: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: colors.primary + '15', gap: 12 },
+  iconBtn:           { width: 40, height: 40, borderRadius: 12, backgroundColor: colors.secondary + '40', alignItems: 'center', justifyContent: 'center' },
+  headerInfo:        { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  avatarWrap:        { position: 'relative' },
+  headerAvatar:      { width: 40, height: 40, borderRadius: 20, borderWidth: 2, borderColor: colors.accent + '50' },
+  headerAvatarPh:    { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.secondary + '60', borderWidth: 2, borderColor: colors.accent + '40', alignItems: 'center', justifyContent: 'center' },
+  headerAvatarIn:    { fontSize: 13, fontWeight: '700', color: colors.text },
+  onlineDot:         { position: 'absolute', bottom: 0, right: 0, width: 11, height: 11, borderRadius: 5.5, backgroundColor: colors.onlineColor, borderWidth: 2, borderColor: colors.background },
+  headerTextCol:     { flex: 1 },
+  headerName:        { fontSize: 16, fontWeight: '700', color: colors.text, letterSpacing: -0.2 },
+  headerStatus:      { fontSize: 12, color: colors.primary + '60', marginTop: 1 },
+  headerStatusOnline:{ color: colors.onlineColor, fontWeight: '600' },
+  selectCount:       { flex: 1, fontSize: 16, fontWeight: '700', color: colors.text, marginLeft: 4 },
+  selectActions:     { flexDirection: 'row', gap: 4 },
+  msgList:           { paddingVertical: 12, paddingBottom: 6 },
+  inputBar:          { flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 10, paddingVertical: 10, paddingBottom: Platform.OS === 'ios' ? 28 : 10, borderTopWidth: 1, borderTopColor: colors.primary + '12', backgroundColor: colors.background, gap: 8 },
+  attachBtn:         { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  inputWrap:         { flex: 1, backgroundColor: colors.secondary + '30', borderRadius: 22, borderWidth: 1.5, borderColor: colors.primary + '25', paddingHorizontal: 16, paddingVertical: Platform.OS === 'ios' ? 10 : 6, maxHeight: 120 },
+  input:             { color: colors.text, fontSize: 15, lineHeight: 20 },
+  sendBtn:           { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', shadowColor: colors.accent, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 6 },
+  sendBtnOff:        { backgroundColor: colors.secondary + '40', shadowOpacity: 0, elevation: 0 },
 });
 
 export default ChatScreen;

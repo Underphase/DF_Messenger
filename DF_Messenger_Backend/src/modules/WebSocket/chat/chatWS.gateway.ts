@@ -41,9 +41,15 @@ export class ChatGateway implements OnGatewayConnection {
     @MessageBody() data: { chatId: number },
     @ConnectedSocket() socket: Socket
   ) {
+    const userId = socket.data.userId
+    if (!userId) return { error: 'Не авторизован' }
+
     socket.join(`chat_${data.chatId}`)
 
-    const messages = await this.chatService.getMessagesFromChat(data.chatId)
+    const [messages, chat] = await Promise.all([
+      this.chatService.getMessagesFromChat(data.chatId, userId),
+      this.chatService.getChatWithPinned(data.chatId)
+    ])
 
     const messagesWithUrls = await Promise.all(
       messages.map(async (msg) => {
@@ -57,7 +63,11 @@ export class ChatGateway implements OnGatewayConnection {
       })
     )
 
-    return { success: true, messages: messagesWithUrls }
+    return {
+      success: true,
+      messages: messagesWithUrls,
+      pinnedMessage: chat?.pinnedMessage ?? null
+    }
   }
 
   @SubscribeMessage('leave_chat')
@@ -71,19 +81,117 @@ export class ChatGateway implements OnGatewayConnection {
 
   @SubscribeMessage('send_message')
   async handleSendMessage(
-    @MessageBody() data: { chatId: number; content: string },
+    @MessageBody() data: { chatId: number; content: string; forwardedFromId?: number },
     @ConnectedSocket() socket: Socket
   ) {
     const userId = socket.data.userId
-		if (!userId) return { error: 'Не авторизован' }
+    if (!userId) return { error: 'Не авторизован' }
 
-		const message = await this.chatService.sendMessage(
-			{ chatId: data.chatId, type: MessageType.TEXT, content: data.content },
-			userId
-		)
+    const message = await this.chatService.sendMessage(
+      { chatId: data.chatId, type: MessageType.TEXT, content: data.content, forwardedFromId: data.forwardedFromId },
+      userId
+    )
 
     this.server.to(`chat_${data.chatId}`).emit('new_message', message)
     return message
+  }
+
+  @SubscribeMessage('delete_message')
+  async handleDeleteMessage(
+    @MessageBody() data: { chatId: number; messageId: number; forEveryone: boolean },
+    @ConnectedSocket() socket: Socket
+  ) {
+    const userId = socket.data.userId
+    if (!userId) return { error: 'Не авторизован' }
+
+    const result = await this.chatService.deleteMessage(data.messageId, userId, data.forEveryone)
+
+    if (data.forEveryone) {
+      this.server.to(`chat_${data.chatId}`).emit('message_deleted', {
+        messageId: data.messageId,
+        chatId: data.chatId,
+        forEveryone: true
+      })
+    } else {
+      socket.emit('message_deleted', {
+        messageId: data.messageId,
+        chatId: data.chatId,
+        forEveryone: false
+      })
+    }
+
+    return result
+  }
+
+  @SubscribeMessage('edit_message')
+  async handleEditMessage(
+    @MessageBody() data: { chatId: number; messageId: number; content: string },
+    @ConnectedSocket() socket: Socket
+  ) {
+    const userId = socket.data.userId
+    if (!userId) return { error: 'Не авторизован' }
+
+    const message = await this.chatService.editMessage(data.messageId, userId, data.content)
+
+    this.server.to(`chat_${data.chatId}`).emit('message_edited', message)
+    return message
+  }
+
+  @SubscribeMessage('pin_message')
+  async handlePinMessage(
+    @MessageBody() data: { chatId: number; messageId: number },
+    @ConnectedSocket() socket: Socket
+  ) {
+    const userId = socket.data.userId
+    if (!userId) return { error: 'Не авторизован' }
+
+    const chat = await this.chatService.pinMessage(data.chatId, data.messageId, userId)
+
+    this.server.to(`chat_${data.chatId}`).emit('message_pinned', {
+      chatId: data.chatId,
+      pinnedMessage: chat.pinnedMessage
+    })
+
+    return chat
+  }
+
+  @SubscribeMessage('unpin_message')
+  async handleUnpinMessage(
+    @MessageBody() data: { chatId: number },
+    @ConnectedSocket() socket: Socket
+  ) {
+    const userId = socket.data.userId
+    if (!userId) return { error: 'Не авторизован' }
+
+    await this.chatService.unpinMessage(data.chatId, userId)
+
+    this.server.to(`chat_${data.chatId}`).emit('message_unpinned', { chatId: data.chatId })
+    return { success: true }
+  }
+
+  @SubscribeMessage('delete_chat')
+  async handleDeleteChat(
+    @MessageBody() data: { chatId: number; forEveryone: boolean },
+    @ConnectedSocket() socket: Socket
+  ) {
+    const userId = socket.data.userId
+    if (!userId) return { error: 'Не авторизован' }
+
+    const result = await this.chatService.deleteChat(data.chatId, data.forEveryone, userId)
+
+    if (data.forEveryone) {
+      this.server.to(`chat_${data.chatId}`).emit('chat_deleted', {
+        chatId: data.chatId,
+        forEveryone: true
+      })
+    } else {
+      socket.emit('chat_deleted', {
+        chatId: data.chatId,
+        forEveryone: false
+      })
+    }
+
+    return result
   }
 
   @SubscribeMessage('request_upload_url')
@@ -91,8 +199,8 @@ export class ChatGateway implements OnGatewayConnection {
     @MessageBody() data: { chatId: number; filename: string },
     @ConnectedSocket() socket: Socket
   ) {
-		 const userId = socket.data.userId
-  	if (!userId) return { error: 'Не авторизован' }
+    const userId = socket.data.userId
+    if (!userId) return { error: 'Не авторизован' }
 
     const key = `chat/${data.chatId}/${uuidv4()}-${data.filename}`
     const uploadUrl = await this.minioService.getUploadUrl('chat-media', key)
@@ -101,27 +209,23 @@ export class ChatGateway implements OnGatewayConnection {
 
   @SubscribeMessage('confirm_media')
   async handleConfirmMedia(
-    @MessageBody() data: { chatId: number; key: string; type: MessageType },
+    @MessageBody() data: { chatId: number; key: string; type: MessageType; forwardedFromId?: number },
     @ConnectedSocket() socket: Socket
   ) {
     const userId = socket.data.userId
-		if (!userId) return { error: 'Не авторизован' }
+    if (!userId) return { error: 'Не авторизован' }
 
     const exists = await this.minioService.checkExists('chat-media', data.key)
     if (!exists) return { error: 'Файл не найден в хранилище' }
 
-		const message = await this.chatService.sendMessage(
-			{ chatId: data.chatId, type: data.type, mediaUrl: data.key },
-			userId
-		)
+    const message = await this.chatService.sendMessage(
+      { chatId: data.chatId, type: data.type, mediaUrl: data.key, forwardedFromId: data.forwardedFromId },
+      userId
+    )
 
     const mediaUrl = await this.minioService.getDownloadUrl('chat-media', data.key)
 
-    this.server.to(`chat_${data.chatId}`).emit('new_message', {
-      ...message,
-      mediaUrl
-    })
-
+    this.server.to(`chat_${data.chatId}`).emit('new_message', { ...message, mediaUrl })
     return { ...message, mediaUrl }
   }
 
@@ -131,7 +235,7 @@ export class ChatGateway implements OnGatewayConnection {
     @ConnectedSocket() socket: Socket
   ) {
     const userId = socket.data.userId
-		if (!userId) return { error: 'Не авторизован' }
+    if (!userId) return { error: 'Не авторизован' }
 
     const result = await this.chatService.createReaction(data.messageId, userId, data.emoji)
 
@@ -151,8 +255,7 @@ export class ChatGateway implements OnGatewayConnection {
     @ConnectedSocket() socket: Socket
   ) {
     const userId = socket.data.userId
-		if (!userId) return { error: 'Не авторизован' }
-
+    if (!userId) return { error: 'Не авторизован' }
     socket.to(`chat_${data.chatId}`).emit('user_typing', { userId, chatId: data.chatId })
   }
 
@@ -162,7 +265,7 @@ export class ChatGateway implements OnGatewayConnection {
     @ConnectedSocket() socket: Socket
   ) {
     const userId = socket.data.userId
-		if (!userId) return { error: 'Не авторизован' }
+    if (!userId) return { error: 'Не авторизован' }
     socket.to(`chat_${data.chatId}`).emit('user_stop_typing', { userId, chatId: data.chatId })
   }
 
@@ -172,7 +275,8 @@ export class ChatGateway implements OnGatewayConnection {
     @ConnectedSocket() socket: Socket
   ) {
     const userId = socket.data.userId
-		if (!userId) return { error: 'Не авторизован' }
+    if (!userId) return { error: 'Не авторизован' }
+
     await this.chatService.markMessagesAsRead(data.chatId, userId)
 
     this.server.to(`chat_${data.chatId}`).emit('messages_read', {

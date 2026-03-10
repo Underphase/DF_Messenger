@@ -81,7 +81,7 @@ export class UserService {
 		const isEmailExist = await this.userRepo.getUserFromMail(dto.newEmail)
 		if (isEmailExist) throw new ConflictException('Такая почта уже существует!')
 
-		const code = await this.redis.generateTemporaryCode(dto.newEmail, user.username, 60)
+		const code = await this.redis.generateTemporaryCode(dto.newEmail, 60)
 		await this.mail.sendEmail('DF_Messenger', dto.newEmail, 'Код для смены почты', code)
 
 		return {
@@ -91,7 +91,7 @@ export class UserService {
 
 	async confirmChangeEmail(dto: confirmChangeEmailDto, userId: number) {
 		const user = await this.userRepo.getUserFromId(userId)
-		if (await this.redis.confirmTemporaryCode(dto.newEmail, user.username, dto.code)) {
+		if (await this.redis.confirmTemporaryCode(dto.newEmail, dto.code)) {
 			await this.profile.changeEmail(userId, dto.newEmail)
 			return {
 				message: "Правильный код!"
@@ -107,7 +107,7 @@ export class UserService {
 		if (dto.newPassword !== dto.ConfirmPassword) throw new ConflictException('Пароли не совподают!')
 		if (dto.newPassword === dto.oldPassword) throw new ConflictException('Пароль не должен совподать с новым')
 
-		const code = await this.redis.generateTemporaryCode(user.email, user.username, 60)
+		const code = await this.redis.generateTemporaryCode(user.email, 60)
 		await this.mail.sendEmail('DF_Messenger', user.email, "Ваш код для смены пароля", code)
 		return {
 			message: "Код для смены пароля успешно отправлено на почту!"
@@ -116,7 +116,7 @@ export class UserService {
 
 	async confirmChangePassword(dto: confirmChangePasswordDto, userId: number) {
 		const user = await this.userRepo.getUserFromId(userId)
-		if (await this.redis.confirmTemporaryCode(user.email, user.username, dto.code)) {
+		if (await this.redis.confirmTemporaryCode(user.email, dto.code)) {
 			const hashedPass = await bcrypt.hash(dto.newPassword, 10)
 			await this.profile.changePassword(userId, hashedPass)
 			return {

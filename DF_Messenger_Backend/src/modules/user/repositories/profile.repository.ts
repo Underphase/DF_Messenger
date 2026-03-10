@@ -46,4 +46,6 @@ export class ProfileRepository {
 			data: { password: newPassword }
 		})
 	}
+
+	
 }
