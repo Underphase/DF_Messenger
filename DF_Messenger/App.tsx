@@ -6,7 +6,7 @@ import { SocketProvider } from './src/context/SocketContext'
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { retry: 2, staleTime: 5 * 60 * 1000 },
+    queries: { retry: 2, staleTime: 0 },
     mutations: { retry: 1 },
   },
 });

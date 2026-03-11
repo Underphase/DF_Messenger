@@ -9,6 +9,7 @@ import KeyScreen from '../screens/KeyScreen';
 import LoginScreen from '../screens/LoginScreen';
 import MainNavigator from './MainNavigator';
 import ChatScreen from '../screens/chat/ChatScreen';
+import UserProfileScreen from '../screens/friends/UserProfileScreen';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const AppStack = createNativeStackNavigator<AppStackParamList>();
@@ -24,12 +25,15 @@ const RootNavigator = () => {
     <NavigationContainer>
       {authState === 'authenticated' ? (
         <AppStack.Navigator screenOptions={{ headerShown: false }}>
-          {/* Tab navigator lives here — tab bar is naturally hidden in ChatScreen */}
           <AppStack.Screen name="MainScreen" component={MainNavigator} />
-          {/* ChatScreen is ABOVE the tab navigator so the tab bar disappears */}
           <AppStack.Screen
             name="ChatScreen"
             component={ChatScreen}
+            options={{ animation: 'slide_from_right' }}
+          />
+          <AppStack.Screen
+            name="UserProfileScreen"
+            component={UserProfileScreen}
             options={{ animation: 'slide_from_right' }}
           />
         </AppStack.Navigator>

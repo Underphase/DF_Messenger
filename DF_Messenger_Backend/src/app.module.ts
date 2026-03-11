@@ -29,7 +29,7 @@ import { ChatWSModule } from './modules/WebSocket/chat/chatWS.module'
 		ThrottlerModule.forRoot({
 			throttlers: [{
 				ttl: 60 * 1000,
-				limit: 10
+				limit: 300
 			}],
 			storage: new ThrottlerStorageRedisService(process.env.REDIS_URL)
 		}),

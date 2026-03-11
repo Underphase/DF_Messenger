@@ -26,8 +26,8 @@ export class ChatService {
     return this.chatRepo.findMessage(search, chatId)
   }
 
-  async getChatWithPinned(chatId: number) {
-    return this.chatRepo.getChatWithPinned(chatId)
+  async getPinnedMessages(chatId: number, userId: number) {
+    return this.chatRepo.getPinnedMessages(chatId, userId)
   }
 
   async getUnreadCount(userId: number) {
@@ -58,11 +58,16 @@ export class ChatService {
     return this.chatRepo.editMessage(messageId, userId, content)
   }
 
-  async pinMessage(chatId: number, messageId: number, userId: number) {
-    return this.chatRepo.pinMessage(chatId, messageId, userId)
+  async pinMessage(chatId: number, messageId: number, userId: number, forEveryone: boolean) {
+    return this.chatRepo.pinMessage(chatId, messageId, userId, forEveryone)
   }
 
-  async unpinMessage(chatId: number, userId: number) {
-    return this.chatRepo.unpinMessage(chatId, userId)
+  async unpinMessage(chatId: number, messageId: number, userId: number) {
+    return this.chatRepo.unpinMessage(chatId, messageId, userId)
   }
+
+  async getChatParticipants(chatId: number) {
+    return this.chatRepo.getChatParticipants(chatId)
+  }
+
 }

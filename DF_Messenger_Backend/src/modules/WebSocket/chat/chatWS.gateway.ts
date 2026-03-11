@@ -31,6 +31,7 @@ export class ChatGateway implements OnGatewayConnection {
       if (!token) { socket.disconnect(); return }
       const payload = jwt.verify(token, process.env.JWT_ACCESS_KEY!) as JwtPayload
       socket.data.userId = payload.id
+      socket.join(`user_${payload.id}`)
     } catch {
       socket.disconnect()
     }
@@ -46,9 +47,9 @@ export class ChatGateway implements OnGatewayConnection {
 
     socket.join(`chat_${data.chatId}`)
 
-    const [messages, chat] = await Promise.all([
+    const [messages, pinnedMessages] = await Promise.all([
       this.chatService.getMessagesFromChat(data.chatId, userId),
-      this.chatService.getChatWithPinned(data.chatId)
+      this.chatService.getPinnedMessages(data.chatId, userId)
     ])
 
     const messagesWithUrls = await Promise.all(
@@ -66,7 +67,7 @@ export class ChatGateway implements OnGatewayConnection {
     return {
       success: true,
       messages: messagesWithUrls,
-      pinnedMessage: chat?.pinnedMessage ?? null
+      pinnedMessages
     }
   }
 
@@ -93,6 +94,14 @@ export class ChatGateway implements OnGatewayConnection {
     )
 
     this.server.to(`chat_${data.chatId}`).emit('new_message', message)
+
+    const participants = await this.chatService.getChatParticipants(data.chatId)
+    for (const participantId of participants) {
+      if (participantId !== userId) {
+        this.server.to(`user_${participantId}`).emit('new_chat', { chatId: data.chatId })
+      }
+    }
+
     return message
   }
 
@@ -139,34 +148,46 @@ export class ChatGateway implements OnGatewayConnection {
 
   @SubscribeMessage('pin_message')
   async handlePinMessage(
+    @MessageBody() data: { chatId: number; messageId: number; forEveryone: boolean },
+    @ConnectedSocket() socket: Socket
+  ) {
+    const userId = socket.data.userId
+    if (!userId) return { error: 'Не авторизован' }
+
+    const pinnedMessages = await this.chatService.pinMessage(data.chatId, data.messageId, userId, data.forEveryone)
+
+    if (data.forEveryone) {
+      this.server.to(`chat_${data.chatId}`).emit('message_pinned', {
+        chatId: data.chatId,
+        pinnedMessages
+      })
+    } else {
+      socket.emit('message_pinned', {
+        chatId: data.chatId,
+        pinnedMessages
+      })
+    }
+
+    return { pinnedMessages }
+  }
+
+  @SubscribeMessage('unpin_message')
+  async handleUnpinMessage(
     @MessageBody() data: { chatId: number; messageId: number },
     @ConnectedSocket() socket: Socket
   ) {
     const userId = socket.data.userId
     if (!userId) return { error: 'Не авторизован' }
 
-    const chat = await this.chatService.pinMessage(data.chatId, data.messageId, userId)
+    const pinnedMessages = await this.chatService.unpinMessage(data.chatId, data.messageId, userId)
 
-    this.server.to(`chat_${data.chatId}`).emit('message_pinned', {
+    this.server.to(`chat_${data.chatId}`).emit('message_unpinned', {
       chatId: data.chatId,
-      pinnedMessage: chat.pinnedMessage
+      messageId: data.messageId,
+      pinnedMessages
     })
 
-    return chat
-  }
-
-  @SubscribeMessage('unpin_message')
-  async handleUnpinMessage(
-    @MessageBody() data: { chatId: number },
-    @ConnectedSocket() socket: Socket
-  ) {
-    const userId = socket.data.userId
-    if (!userId) return { error: 'Не авторизован' }
-
-    await this.chatService.unpinMessage(data.chatId, userId)
-
-    this.server.to(`chat_${data.chatId}`).emit('message_unpinned', { chatId: data.chatId })
-    return { success: true }
+    return { pinnedMessages }
   }
 
   @SubscribeMessage('delete_chat')
@@ -226,6 +247,14 @@ export class ChatGateway implements OnGatewayConnection {
     const mediaUrl = await this.minioService.getDownloadUrl('chat-media', data.key)
 
     this.server.to(`chat_${data.chatId}`).emit('new_message', { ...message, mediaUrl })
+
+    const participants = await this.chatService.getChatParticipants(data.chatId)
+    for (const participantId of participants) {
+      if (participantId !== userId) {
+        this.server.to(`user_${participantId}`).emit('new_chat', { chatId: data.chatId })
+      }
+    }
+
     return { ...message, mediaUrl }
   }
 

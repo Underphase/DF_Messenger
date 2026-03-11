@@ -73,20 +73,30 @@ export class ChatController {
     return this.chatService.editMessage(+messageId, req.user!.userId, content)
   }
 
-  @Post('pin')
-  async pinMessage(
+@Post('pin')
+async pinMessage(
+  @Req() req: AuthRequest,
+  @Body('chatId') chatId: number,
+  @Body('messageId') messageId: number,
+  @Body('forEveryone') forEveryone: boolean
+) {
+  return this.chatService.pinMessage(+chatId, +messageId, req.user!.userId, forEveryone)
+}
+
+  @Delete('unpin')
+  async unpinMessage(
     @Req() req: AuthRequest,
     @Body('chatId') chatId: number,
     @Body('messageId') messageId: number
   ) {
-    return this.chatService.pinMessage(+chatId, +messageId, req.user!.userId)
+    return this.chatService.unpinMessage(+chatId, +messageId, req.user!.userId)
   }
 
-  @Post('unpin')
-  async unpinMessage(
+  @Get('pinned')
+  async getPinnedMessages(
     @Req() req: AuthRequest,
-    @Body('chatId') chatId: number
+    @Query('chatId') chatId: string
   ) {
-    return this.chatService.unpinMessage(+chatId, req.user!.userId)
+    return this.chatService.getPinnedMessages(Number(chatId), req.user!.userId)
   }
 }

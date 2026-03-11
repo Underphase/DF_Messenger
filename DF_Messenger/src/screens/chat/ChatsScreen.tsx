@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -7,6 +7,7 @@ import {
   Modal,
   Platform,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -36,10 +37,11 @@ type NavProp = NativeStackNavigationProp<AppStackParamList>;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const getOtherUser = (chat: Chat, myId: number): OtherUser => {
-  const other = chat.participants.find((p) => p.user.id !== myId);
+const getOtherUser = (chat: Chat, myId: number): OtherUser | null => {
+  const other = chat.participants.find((p) => p.user?.id !== myId);
   const u     = other?.user ?? chat.participants[0]?.user;
-  return { id: u.id, nickName: u.nickName, username: u.username, avatarUrl: u.avatarUrl };
+  if (!u?.id) return null;
+  return { id: u.id, nickName: u.nickName ?? '...', username: u.username ?? '...', avatarUrl: u.avatarUrl ?? null };
 };
 
 const formatTime = (dateStr: string) => {
@@ -87,6 +89,7 @@ const DeleteMenu: React.FC<DeleteMenuProps> = ({ chat, myId, onClose, onDeleteSe
 
   if (!chat) return null;
   const other    = getOtherUser(chat, myId);
+  if (!other) return null;
   const initials = other.nickName.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 
   return (
@@ -173,11 +176,12 @@ const ChatItem: React.FC<{
   onLongPress: () => void;
 }> = ({ chat, myId, unreadCount, isTyping, onPress, onLongPress }) => {
   const other     = getOtherUser(chat, myId);
-  const { isOnline } = useUserOnlineStatus(other.id);
+  const { isOnline } = useUserOnlineStatus(other?.id ?? 0);
   const last      = chat.messages[0];
   const hasUnread = unreadCount > 0;
-  const initials  = other.nickName.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
-  const hasPinned = !!chat.pinnedMessage;
+  const initials  = (other?.nickName ?? '?').split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+  if (!other) return null;
+  const hasPinned = Array.isArray(chat.pinnedMessages) && chat.pinnedMessages.length > 0;
 
   const preview = (): string => {
     if (isTyping) return 'печатает...';
@@ -203,7 +207,6 @@ const ChatItem: React.FC<{
             <Text style={[cs.name, hasUnread && cs.nameBold]} numberOfLines={1}>{other.nickName}</Text>
             {hasPinned && <Icon name="bookmark" size={11} color={colors.accent + '80'} />}
           </View>
-          {/* ⚠️  Время показывается всегда если есть сообщение — не скрываем при typing */}
           {last && (
             <Text style={[cs.time, hasUnread && cs.timeAccent]}>{formatTime(last.createdAt)}</Text>
           )}
@@ -353,6 +356,7 @@ const ChatsScreen = () => {
   const [menuChat,       setMenuChat]       = useState<Chat | null>(null);
 
   const { data: me }    = useMe();
+  // ИСПРАВЛЕНИЕ: используем refetch напрямую из useChats
   const { data: chats, isLoading, refetch } = useChats();
   const { data: unreadPerChat } = useUnreadPerChat();
   const { data: totalUnread }   = useUnreadCount();
@@ -360,17 +364,31 @@ const ChatsScreen = () => {
   const { mutateAsync: createChat, isPending: isCreating } = useCreateChat();
   const isTypingInChat = useGlobalTyping();
 
+  // ИСПРАВЛЕНИЕ: убран useFocusEffect с refetch — он создавал race condition
+  // с useGlobalChatListener. Данные обновляются через socket events и
+  // refetchOnMount: 'always' в useChats.
+
   const getUnread = (chatId: number) =>
     unreadPerChat?.find((u) => u.chatId === chatId)?.unreadCount ?? 0;
 
-  const handleRefresh = async () => { setRefreshing(true); await refetch(); setRefreshing(false); };
+  // Pull-to-refresh: принудительный refetch с сервера
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await refetch();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refetch]);
 
   const openChat = (chatId: number, otherUser: OtherUser) =>
     navigation.navigate('ChatScreen', { chatId, otherUser });
 
   const handleChatPress = (chat: Chat) => {
     if (!me) return;
-    openChat(chat.id, getOtherUser(chat, me.id));
+    const other = getOtherUser(chat, me.id);
+    if (!other) return;
+    openChat(chat.id, other);
   };
 
   const handleFriendSelect = async (friend: Friend, existingChatId?: number) => {
@@ -410,11 +428,25 @@ const ChatsScreen = () => {
       </View>
 
       {!chats?.length ? (
-        <View style={ss.empty}>
+        // ИСПРАВЛЕНИЕ: ScrollView с RefreshControl вместо View — даёт pull-to-refresh
+        // на пустом экране и не перекрывает кнопку в хедере
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={ss.emptyScroll}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor={colors.accent}
+              colors={[colors.accent]}
+              progressViewOffset={0}
+            />
+          }
+        >
           <View style={ss.emptyIcon}><Icon name="message-circle" size={36} color={colors.accent + '70'} /></View>
           <Text style={ss.emptyTitle}>Нет чатов</Text>
           <Text style={ss.emptySub}>Нажмите карандаш вверху, чтобы написать другу</Text>
-        </View>
+        </ScrollView>
       ) : (
         <FlatList
           data={chats}
@@ -430,16 +462,21 @@ const ChatsScreen = () => {
               colors={[colors.accent]}
             />
           }
-          renderItem={({ item }) => (
-            <ChatItem
-              chat={item}
-              myId={me?.id ?? 0}
-              unreadCount={getUnread(item.id)}
-              isTyping={isTypingInChat(item.id)}
-              onPress={() => handleChatPress(item)}
-              onLongPress={() => setMenuChat(item)}
-            />
-          )}
+          renderItem={({ item }) => {
+            // Пропускаем чаты без корректных участников (могут появиться
+            // пока invalidate ещё не завершился)
+            if (!item.participants?.length || !item.participants[0]?.user?.id) return null;
+            return (
+              <ChatItem
+                chat={item}
+                myId={me?.id ?? 0}
+                unreadCount={getUnread(item.id)}
+                isTyping={isTypingInChat(item.id)}
+                onPress={() => handleChatPress(item)}
+                onLongPress={() => setMenuChat(item)}
+              />
+            );
+          }}
           ItemSeparatorComponent={() => <View style={ss.sep} />}
         />
       )}
@@ -475,6 +512,7 @@ const ss = StyleSheet.create({
   list:         { paddingVertical: 8, paddingHorizontal: 16 },
   sep:          { height: 1, backgroundColor: colors.primary + '10', marginLeft: 82 },
   empty:        { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 12 },
+  emptyScroll:  { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 12 },
   emptyIcon:    { width: 80, height: 80, borderRadius: 28, backgroundColor: colors.secondary + '30', borderWidth: 1, borderColor: colors.primary + '20', alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
   emptyTitle:   { fontSize: 18, fontWeight: '700', color: colors.text },
   emptySub:     { fontSize: 14, color: colors.primary + '70', textAlign: 'center', lineHeight: 20 },

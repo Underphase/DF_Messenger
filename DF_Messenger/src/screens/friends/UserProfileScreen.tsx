@@ -104,7 +104,7 @@ const UserProfileScreen = () => {
         username: user.username,
         avatarUrl: user.avatarUrl,
       };
-      navigation.navigate('ChatScreen', { chatId: chat.id, otherUser });
+      navigation.replace('ChatScreen', { chatId: chat.id, otherUser });
     } catch {
       Alert.alert('Ошибка', 'Не удалось открыть чат');
     }

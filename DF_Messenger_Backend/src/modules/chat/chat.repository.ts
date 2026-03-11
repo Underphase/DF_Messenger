@@ -16,6 +16,13 @@ export class ChatRepository {
       },
       include: { participants: true }
     })
+
+    if (chat) {
+      const bothPresent = chat.participants.some(p => p.userId === userId) &&
+                          chat.participants.some(p => p.userId === receiverId)
+      if (!bothPresent) chat = null
+    }
+
     if (!chat) {
       chat = await this.prisma.chat.create({
         data: {
@@ -26,12 +33,17 @@ export class ChatRepository {
         include: { participants: true }
       })
     }
+
     return chat
   }
 
   async getUserChats(userId: number) {
     return this.prisma.chat.findMany({
-      where: { participants: { some: { userId } } },
+      where: {
+        participants: {
+          some: { userId, isHidden: false }
+        }
+      },
       include: {
         participants: {
           select: {
@@ -45,10 +57,15 @@ export class ChatRepository {
           take: 1,
           include: { sender: { select: { id: true, nickName: true } } }
         },
-        pinnedMessage: {
+        pinnedMessages: {
           include: {
-            sender: { select: { id: true, nickName: true, username: true } }
-          }
+            message: {
+              include: {
+                sender: { select: { id: true, nickName: true, username: true } }
+              }
+            }
+          },
+          orderBy: { createdAt: 'asc' }
         }
       },
       orderBy: { updatedAt: 'desc' }
@@ -68,8 +85,24 @@ export class ChatRepository {
     if (deleteForEveryone) {
       await this.prisma.chat.delete({ where: { id: chatId } })
     } else {
-      await this.prisma.chatParticipant.delete({
-        where: { chatId_userId: { chatId, userId: currUserId } }
+      const messages = await this.prisma.message.findMany({
+        where: { chatId },
+        select: { id: true }
+      })
+
+      if (messages.length > 0) {
+        await this.prisma.messageDeletedFor.createMany({
+          data: messages.map(m => ({
+            messageId: m.id,
+            userId: currUserId
+          })),
+          skipDuplicates: true
+        })
+      }
+
+      await this.prisma.chatParticipant.update({
+        where: { chatId_userId: { chatId, userId: currUserId } },
+        data: { isHidden: true }
       })
     }
 
@@ -111,6 +144,11 @@ export class ChatRepository {
       data: { updatedAt: new Date() }
     })
 
+    await this.prisma.chatParticipant.updateMany({
+      where: { chatId },
+      data: { isHidden: false }
+    })
+
     return message
   }
 
@@ -125,11 +163,6 @@ export class ChatRepository {
     if (!isParticipant) throw new ForbiddenException('Вы не участник этого чата')
 
     if (forEveryone) {
-
-      await this.prisma.chat.updateMany({
-        where: { pinnedMessageId: messageId },
-        data: { pinnedMessageId: null }
-      })
 
       await this.prisma.message.updateMany({
         where: { forwardedFromId: messageId },
@@ -166,7 +199,7 @@ export class ChatRepository {
     })
   }
 
-  async pinMessage(chatId: number, messageId: number, userId: number) {
+  async pinMessage(chatId: number, messageId: number, userId: number, forEveryone: boolean) {
     const participant = await this.prisma.chatParticipant.findUnique({
       where: { chatId_userId: { chatId, userId } }
     })
@@ -175,37 +208,48 @@ export class ChatRepository {
     const message = await this.prisma.message.findUnique({ where: { id: messageId } })
     if (!message || message.chatId !== chatId) throw new NotFoundException('Сообщение не найдено')
 
-    return this.prisma.chat.update({
-      where: { id: chatId },
-      data: { pinnedMessageId: messageId },
-      include: {
-        pinnedMessage: {
-          include: { sender: { select: { id: true, nickName: true, username: true } } }
-        }
-      }
+    await this.prisma.chatPinnedMessage.deleteMany({
+      where: { chatId, messageId }
     })
+
+    await this.prisma.chatPinnedMessage.create({
+      data: { chatId, messageId, userId: forEveryone ? null : userId }
+    })
+
+    return this.getPinnedMessages(chatId, userId)
   }
 
-  async unpinMessage(chatId: number, userId: number) {
+  async unpinMessage(chatId: number, messageId: number, userId: number) {
     const participant = await this.prisma.chatParticipant.findUnique({
       where: { chatId_userId: { chatId, userId } }
     })
     if (!participant) throw new ForbiddenException('Вы не участник этого чата')
 
-    return this.prisma.chat.update({
-      where: { id: chatId },
-      data: { pinnedMessageId: null }
+    await this.prisma.chatPinnedMessage.deleteMany({
+      where: {
+        chatId,
+        messageId,
+        OR: [{ userId: null }, { userId }]
+      }
     })
+
+    return this.getPinnedMessages(chatId, userId)
   }
 
-  async getChatWithPinned(chatId: number) {
-    return this.prisma.chat.findUnique({
-      where: { id: chatId },
+  async getPinnedMessages(chatId: number, userId: number) {
+    return this.prisma.chatPinnedMessage.findMany({
+      where: {
+        chatId,
+        OR: [{ userId: null }, { userId }]
+      },
       include: {
-        pinnedMessage: {
-          include: { sender: { select: { id: true, nickName: true, username: true } } }
+        message: {
+          include: {
+            sender: { select: { id: true, nickName: true, username: true } }
+          }
         }
-      }
+      },
+      orderBy: { message: { createdAt: 'asc' } }
     })
   }
 
@@ -331,5 +375,13 @@ export class ChatRepository {
         })
       }
     })
+  }
+
+  async getChatParticipants(chatId: number): Promise<number[]> {
+    const participants = await this.prisma.chatParticipant.findMany({
+      where: { chatId },
+      select: { userId: true }
+    })
+    return participants.map(p => p.userId)
   }
 }

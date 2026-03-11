@@ -55,7 +55,7 @@ function _setTyping(chatId: number, userId: number, active: boolean) {
   _typingListeners.forEach((fn) => fn());
 }
 
-// ─── Instant unread helpers ───────────────────────────────────────────────────
+// ─── Unread helpers ───────────────────────────────────────────────────────────
 
 function _incrementUnread(
   queryClient: ReturnType<typeof useQueryClient>,
@@ -65,14 +65,12 @@ function _incrementUnread(
 ) {
   if (myId == null) return;
   if (Number(senderId) === Number(myId)) return;
-
   queryClient.setQueryData<UnreadPerChat[]>(chatQueryKeys.unreadPerChat, (old) => {
     if (!old) return [{ chatId, unreadCount: 1 }];
     const exists = old.some((u) => u.chatId === chatId);
     if (exists) return old.map((u) => u.chatId === chatId ? { ...u, unreadCount: u.unreadCount + 1 } : u);
     return [...old, { chatId, unreadCount: 1 }];
   });
-
   queryClient.setQueryData<{ count: number }>(chatQueryKeys.unreadCount, (old) =>
     old ? { count: old.count + 1 } : { count: 1 },
   );
@@ -98,8 +96,6 @@ function _clearUnread(
 }
 
 // ─── mark_read guard ──────────────────────────────────────────────────────────
-// Вызывается только когда есть сообщения от другого пользователя.
-// Фикс бага: отправитель не засчитывает себе прочтение своих сообщений.
 
 function _markReadIfNeeded(
   socket: any,
@@ -118,12 +114,13 @@ export const useChats = () =>
   useQuery({
     queryKey: chatQueryKeys.list,
     queryFn:  chatApi.getUserChats,
-    staleTime: 30_000,
-    gcTime: 120_000,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
+    staleTime: 0,
+    gcTime: 300_000,
     refetchOnMount: true,
     refetchOnWindowFocus: false,
+    refetchInterval: false,
+    retry: 3,
+    retryDelay: 1000,
   });
 
 // ─── useCreateChat ────────────────────────────────────────────────────────────
@@ -132,7 +129,13 @@ export const useCreateChat = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (receiverId: number) => chatApi.createChat(receiverId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: chatQueryKeys.list }),
+    onSuccess: (newChat) => {
+      queryClient.setQueryData<Chat[]>(chatQueryKeys.list, (old) => {
+        if (!old) return [newChat as unknown as Chat];
+        if (old.some((c) => c.id === (newChat as any).id)) return old;
+        return [newChat as unknown as Chat, ...old];
+      });
+    },
   });
 };
 
@@ -146,12 +149,13 @@ export const useDeleteChat = () => {
     queryClient.setQueryData<Chat[]>(chatQueryKeys.list, (old) =>
       old ? old.filter((c) => c.id !== chatId) : old,
     );
+    _clearUnread(queryClient, chatId);
+
     if (socket?.connected) {
       socket.emit('delete_chat', { chatId, forEveryone });
     } else {
-      chatApi.deleteChat(chatId, forEveryone).catch(() => {
-        queryClient.invalidateQueries({ queryKey: chatQueryKeys.list });
-      });
+      chatApi.deleteChat(chatId, forEveryone)
+        .finally(() => queryClient.refetchQueries({ queryKey: chatQueryKeys.list }));
     }
   }, [socket, queryClient]);
 
@@ -191,12 +195,9 @@ export const useSearchMessages = (chatId: number, q: string) =>
   });
 
 // ─── useForwardToChat ─────────────────────────────────────────────────────────
-// Пересылка сообщения в произвольный чат (не обязательно текущий).
-// Эмитит send_message с нужным chatId и forwardedFromId.
 
 export const useForwardToChat = () => {
   const { socket } = useSocket();
-
   const forwardToChat = useCallback(
     (targetChatId: number, messageId: number) => {
       if (!socket) return;
@@ -208,7 +209,6 @@ export const useForwardToChat = () => {
     },
     [socket],
   );
-
   return { forwardToChat };
 };
 
@@ -219,36 +219,37 @@ export const useChatRoom = (chatId: number) => {
   const queryClient = useQueryClient();
   const { data: me } = useMe();
 
-  const [messages,      setMessages]      = useState<Message[]>([]);
-  const [pinnedMessage, setPinnedMessage] = useState<PinnedMessage | null>(null);
-  const [isLoading,     setIsLoading]     = useState(true);
+  const [messages,       setMessages]       = useState<Message[]>([]);
+  const [pinnedMessages, setPinnedMessages] = useState<PinnedMessage[]>([]);
+  const [isLoading,      setIsLoading]      = useState(true);
 
   const socketRef      = useRef(socket);
   const meRef          = useRef(me);
   const queryClientRef = useRef(queryClient);
+
   useEffect(() => { socketRef.current = socket; },           [socket]);
   useEffect(() => { meRef.current = me; },                   [me]);
   useEffect(() => { queryClientRef.current = queryClient; }, [queryClient]);
 
-  // JOIN
+  // JOIN — только загружаем сообщения, mark_read НЕ вызываем здесь.
+  // mark_read вызывается отдельно когда пользователь физически открыл экран.
   useEffect(() => {
     if (!socket || !isConnected || !chatId) return;
-
     setIsLoading(true);
     setMessages([]);
-    setPinnedMessage(null);
-
-    socket.emit('join_chat', { chatId }, (res: { success: boolean; messages: any[]; pinnedMessage?: PinnedMessage }) => {
+    setPinnedMessages([]);
+    socket.emit('join_chat', { chatId }, (res: { success: boolean; messages: any[]; pinnedMessages?: PinnedMessage[] }) => {
       if (res?.success) {
         const normalized = (res.messages ?? []).map(normalizeMessage);
         setMessages(normalized);
-        if (res.pinnedMessage) setPinnedMessage(res.pinnedMessage);
-        _markReadIfNeeded(socket, chatId, normalized, meRef.current?.id);
+        if (res.pinnedMessages) setPinnedMessages(res.pinnedMessages);
       }
       setIsLoading(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, socket?.id]);
+
+
 
   // LISTENERS
   useEffect(() => {
@@ -259,29 +260,34 @@ export const useChatRoom = (chatId: number) => {
       if (raw.chatId !== chatId) return;
       const msg = normalizeMessage(raw);
 
+
+
+      const senderId = raw.sender?.id ?? raw.senderId;
+
+      let isDuplicate = false;
       setMessages((prev) => {
-        if (prev.some((m) => m.id === msg.id)) return prev;
-        const next = [...prev, msg];
-        const senderId = raw.sender?.id ?? raw.senderId;
-        if (Number(senderId) !== Number(meRef.current?.id)) {
-          socketRef.current?.emit('mark_read', { chatId });
+        if (prev.some((m) => m.id === msg.id)) {
+          isDuplicate = true;
+          return prev;
         }
-        return next;
+        return [...prev, msg];
       });
+
+      if (isDuplicate) return;
+
+      // Увеличиваем счётчик непрочитанных.
+      _incrementUnread(queryClientRef.current, raw.chatId, senderId, meRef.current?.id);
 
       queryClientRef.current.setQueryData<Chat[]>(chatQueryKeys.list, (old) => {
         if (!old) return old;
-        const updated = old.map((chat) =>
+        return [...old.map((chat) =>
           chat.id !== raw.chatId ? chat : {
             ...chat,
             updatedAt: raw.createdAt,
             messages: [{ id: raw.id, content: raw.content ?? null, type: raw.type, createdAt: raw.createdAt, sender: raw.sender }],
           },
-        );
-        return [...updated].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        )].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
       });
-
-      _incrementUnread(queryClientRef.current, raw.chatId, raw.sender?.id ?? raw.senderId, meRef.current?.id);
     };
 
     const onDeleted = (data: MessageDeletedEvent) => {
@@ -289,49 +295,35 @@ export const useChatRoom = (chatId: number) => {
       setMessages((prev) => prev.filter((m) => m.id !== data.messageId));
       queryClientRef.current.setQueryData<Chat[]>(chatQueryKeys.list, (old) => {
         if (!old) return old;
-        return old.map((chat) => {
-          if (chat.id !== chatId) return chat;
-          return { ...chat, messages: chat.messages.filter((m) => m.id !== data.messageId) };
-        });
+        return old.map((chat) =>
+          chat.id !== chatId ? chat : { ...chat, messages: chat.messages.filter((m) => m.id !== data.messageId) }
+        );
       });
     };
 
     const onEdited = (raw: MessageEditedEvent) => {
       if (raw.chatId !== chatId) return;
       setMessages((prev) =>
-        prev.map((m) => {
-          if (m.id !== raw.id) return m;
-          return normalizeMessage({
-            ...m, ...raw,
-            forwardedFrom: raw.forwardedFrom ?? m.forwardedFrom,
-            reactions:    Array.isArray(raw.reactions)    ? raw.reactions    : m.reactions,
-            readReceipts: Array.isArray(raw.readReceipts) ? raw.readReceipts : m.readReceipts,
-          });
-        }),
+        prev.map((m) => m.id !== raw.id ? m : normalizeMessage({
+          ...m, ...raw,
+          forwardedFrom: raw.forwardedFrom ?? m.forwardedFrom,
+          reactions:    Array.isArray(raw.reactions)    ? raw.reactions    : m.reactions,
+          readReceipts: Array.isArray(raw.readReceipts) ? raw.readReceipts : m.readReceipts,
+        })),
       );
       queryClientRef.current.setQueryData<Chat[]>(chatQueryKeys.list, (old) => {
         if (!old) return old;
-        return old.map((chat) => {
-          if (chat.id !== chatId) return chat;
-          return {
+        return old.map((chat) =>
+          chat.id !== chatId ? chat : {
             ...chat,
-            messages: chat.messages.map((m) =>
-              m.id === raw.id ? { ...m, content: raw.content ?? m.content } : m,
-            ),
-          };
-        });
+            messages: chat.messages.map((m) => m.id === raw.id ? { ...m, content: raw.content ?? m.content } : m),
+          }
+        );
       });
     };
 
-    const onPinned = (data: MessagePinnedEvent) => {
-      if (data.chatId !== chatId) return;
-      setPinnedMessage(data.pinnedMessage);
-    };
-
-    const onUnpinned = (data: MessageUnpinnedEvent) => {
-      if (data.chatId !== chatId) return;
-      setPinnedMessage(null);
-    };
+    const onPinned   = (data: MessagePinnedEvent)   => { if (data.chatId === chatId) setPinnedMessages(data.pinnedMessages ?? []); };
+    const onUnpinned = (data: MessageUnpinnedEvent) => { if (data.chatId === chatId) setPinnedMessages(data.pinnedMessages ?? []); };
 
     const onReaction = (data: ReactionEvent) => {
       setMessages((prev) =>
@@ -348,8 +340,7 @@ export const useChatRoom = (chatId: number) => {
     };
 
     const onMessagesRead = (data: MessagesReadEvent) => {
-      if (data.chatId !== chatId) return;
-      _clearUnread(queryClientRef.current, data.chatId);
+      if (data.chatId === chatId) _clearUnread(queryClientRef.current, data.chatId);
     };
 
     s.on('new_message',      onNewMessage);
@@ -372,16 +363,10 @@ export const useChatRoom = (chatId: number) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, socket?.id]);
 
-  // ── Actions ────────────────────────────────────────────────────────────────
-
   const sendMessage = useCallback((content: string, forwardedFromId?: number) => {
     if (!socket) return;
     if (!content.trim() && forwardedFromId == null) return;
-    socket.emit('send_message', {
-      chatId,
-      content: content.trim(),
-      ...(forwardedFromId != null ? { forwardedFromId } : {}),
-    });
+    socket.emit('send_message', { chatId, content: content.trim(), ...(forwardedFromId != null ? { forwardedFromId } : {}) });
   }, [socket, chatId]);
 
   const sendMedia = useCallback(async (
@@ -399,22 +384,15 @@ export const useChatRoom = (chatId: number) => {
     const blob = await (await fetch(file.uri)).blob();
     const response = await fetch(uploadData.uploadUrl, { method: 'PUT', body: blob, headers: { 'Content-Type': file.type } });
     if (!response.ok) throw new Error('Ошибка загрузки файла');
-    socket.emit('confirm_media', {
-      chatId,
-      key: uploadData.key,
-      type: mediaType,
-      ...(forwardedFromId != null ? { forwardedFromId } : {}),
-    });
+    socket.emit('confirm_media', { chatId, key: uploadData.key, type: mediaType, ...(forwardedFromId != null ? { forwardedFromId } : {}) });
   }, [socket, chatId]);
 
-  const editMessage = useCallback((messageId: number, content: string) => {
+  const editMessage   = useCallback((messageId: number, content: string) => {
     if (!socket || !content.trim()) return;
     socket.emit('edit_message', { chatId, messageId, content: content.trim() });
   }, [socket, chatId]);
 
-  // forEveryone: true  = удалить у всех (доступно любому участнику 1:1 чата)
-  // forEveryone: false = скрыть только у себя
-  const deleteMessage = useCallback((messageId: number, forEveryone: boolean) => {
+  const deleteMessage  = useCallback((messageId: number, forEveryone: boolean) => {
     if (!socket) return;
     socket.emit('delete_message', { chatId, messageId, forEveryone });
   }, [socket, chatId]);
@@ -422,18 +400,18 @@ export const useChatRoom = (chatId: number) => {
   const reactToMessage = useCallback((messageId: number, emoji: string) =>
     socket?.emit('react_message', { chatId, messageId, emoji }), [socket, chatId]);
 
-  const pinMessage   = useCallback((messageId: number) =>
-    socket?.emit('pin_message',   { chatId, messageId }), [socket, chatId]);
+  const pinMessage     = useCallback((messageId: number, forEveryone: boolean) =>
+    socket?.emit('pin_message', { chatId, messageId, forEveryone }), [socket, chatId]);
 
-  const unpinMessage = useCallback(() =>
-    socket?.emit('unpin_message', { chatId }), [socket, chatId]);
+  const unpinMessage   = useCallback((messageId: number) =>
+    socket?.emit('unpin_message', { chatId, messageId }), [socket, chatId]);
 
-  const markRead = useCallback(() => {
-    _markReadIfNeeded(socketRef.current, chatId, messages, meRef.current?.id);
-  }, [chatId, messages]);
+  const markRead = useCallback(() =>
+    _markReadIfNeeded(socketRef.current, chatId, messages, meRef.current?.id),
+  [chatId, messages]);
 
   return {
-    messages, pinnedMessage, setPinnedMessage, isLoading,
+    messages, pinnedMessages, setPinnedMessages, isLoading,
     sendMessage, sendMedia, editMessage, deleteMessage,
     reactToMessage, pinMessage, unpinMessage, markRead,
   };
@@ -448,7 +426,6 @@ export const useTyping = (chatId: number) => {
 
   useEffect(() => {
     if (!socket) return;
-
     const onTyping = (data: TypingEvent) => {
       if (data.chatId !== chatId) return;
       setTypingUserIds((prev) => (prev.includes(data.userId) ? prev : [...prev, data.userId]));
@@ -457,16 +434,13 @@ export const useTyping = (chatId: number) => {
         setTypingUserIds((prev) => prev.filter((id) => id !== data.userId));
       }, 3_000);
     };
-
     const onStop = (data: TypingEvent) => {
       if (data.chatId !== chatId) return;
       clearTimeout(timers.current[data.userId]);
       setTypingUserIds((prev) => prev.filter((id) => id !== data.userId));
     };
-
     socket.on('user_typing',      onTyping);
     socket.on('user_stop_typing', onStop);
-
     return () => {
       socket.off('user_typing',      onTyping);
       socket.off('user_stop_typing', onStop);
@@ -480,7 +454,7 @@ export const useTyping = (chatId: number) => {
   return { typingUserIds, startTyping, stopTyping };
 };
 
-// ─── useGlobalChatListener ───────────────────────────────────────────────────
+// ─── useGlobalChatListener ────────────────────────────────────────────────────
 
 export const useGlobalChatListener = () => {
   const { socket, isConnected } = useSocket();
@@ -496,66 +470,82 @@ export const useGlobalChatListener = () => {
   useEffect(() => { meRef.current = me; },                   [me]);
   useEffect(() => { queryClientRef.current = queryClient; }, [queryClient]);
 
-  const joinAllRooms = useCallback(async () => {
+  const joinAllRooms = useCallback((chats?: Chat[]) => {
     const s = socketRef.current;
     if (!s?.connected) return;
-    try {
-      const cached: Chat[] | undefined = queryClientRef.current.getQueryData(chatQueryKeys.list);
-      let chats: Chat[];
-      if (cached && cached.length > 0) {
-        chats = cached;
-      } else {
-        chats = await chatApi.getUserChats();
-        queryClientRef.current.setQueryData(chatQueryKeys.list, chats);
-      }
-      for (const chat of chats) {
-        s.emit('join_chat', { chatId: chat.id }, (res: any) => {
-          if (res?.success) joinedRooms.current.add(chat.id);
-        });
-      }
-    } catch {}
+    const list = chats ?? (queryClientRef.current.getQueryData<Chat[]>(chatQueryKeys.list) ?? []);
+    for (const chat of list) {
+      if (joinedRooms.current.has(chat.id)) continue;
+      s.emit('join_chat', { chatId: chat.id }, (res: any) => {
+        if (res?.success) joinedRooms.current.add(chat.id);
+      });
+    }
   }, []);
 
+  // При подключении/переподключении — рефетч + джоин всех комнат
   useEffect(() => {
     if (!socket || !isConnected) return;
     joinedRooms.current.clear();
-    joinAllRooms();
+    queryClientRef.current
+      .refetchQueries({ queryKey: chatQueryKeys.list, type: 'active' })
+      .then(() => {
+        const chats = queryClientRef.current.getQueryData<Chat[]>(chatQueryKeys.list);
+        joinAllRooms(chats ?? []);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket?.id]);
 
+  // Когда кеш чатов обновился — джоиним новые комнаты
+  useEffect(() => {
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (
+        event.type === 'updated' &&
+        event.query.queryKey[0] === chatQueryKeys.list[0] &&
+        event.query.queryKey[1] === chatQueryKeys.list[1]
+      ) {
+        const chats = event.query.state.data as Chat[] | undefined;
+        if (chats?.length) joinAllRooms(chats);
+      }
+    });
+    return unsubscribe;
+  }, [queryClient, joinAllRooms]);
+
+  // Основные socket-события
   useEffect(() => {
     const s = socketRef.current;
     if (!s) return;
 
     const onNewMessage = (raw: any) => {
       const qc = queryClientRef.current;
+      const chats: Chat[] | undefined = qc.getQueryData(chatQueryKeys.list);
+      const chatExists = chats?.some((c) => c.id === raw.chatId);
+
+      if (!chatExists) {
+        // Незнакомый чат — джоиним, рефетчим список И инкрементим unread
+        _incrementUnread(qc, raw.chatId, raw.sender?.id ?? raw.senderId, meRef.current?.id);
+        if (!joinedRooms.current.has(raw.chatId)) {
+          s.emit('join_chat', { chatId: raw.chatId }, (res: any) => {
+            if (res?.success) joinedRooms.current.add(raw.chatId);
+            qc.refetchQueries({ queryKey: chatQueryKeys.list });
+          });
+        } else {
+          qc.refetchQueries({ queryKey: chatQueryKeys.list });
+        }
+        return;
+      }
+
+      // Чат есть — обновляем превью через setQueryData (без флэша)
       qc.setQueryData<Chat[]>(chatQueryKeys.list, (old) => {
-        if (!old || old.length === 0) {
-          qc.invalidateQueries({ queryKey: chatQueryKeys.list });
-          return old;
-        }
-        const chatExists = old.some((c) => c.id === raw.chatId);
-        if (!chatExists) {
-          if (!joinedRooms.current.has(raw.chatId)) {
-            s.emit('join_chat', { chatId: raw.chatId }, (res: any) => {
-              if (res?.success) {
-                joinedRooms.current.add(raw.chatId);
-                qc.invalidateQueries({ queryKey: chatQueryKeys.list });
-              }
-            });
-          }
-          return old;
-        }
-        const updated = old.map((chat) =>
+        if (!old) return old;
+        return [...old.map((chat) =>
           chat.id !== raw.chatId ? chat : {
             ...chat,
             updatedAt: raw.createdAt,
             messages: [{ id: raw.id, content: raw.content ?? null, type: raw.type, createdAt: raw.createdAt, sender: raw.sender }],
           },
-        );
-        return [...updated].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        )].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
       });
-      _incrementUnread(queryClientRef.current, raw.chatId, raw.sender?.id ?? raw.senderId, meRef.current?.id);
+      _incrementUnread(qc, raw.chatId, raw.sender?.id ?? raw.senderId, meRef.current?.id);
     };
 
     const onMessagesRead = (data: MessagesReadEvent) => {
@@ -567,11 +557,7 @@ export const useGlobalChatListener = () => {
         old ? old.filter((c) => c.id !== data.chatId) : old,
       );
       joinedRooms.current.delete(data.chatId);
-    };
-
-    const onNewChat = () => {
-      queryClientRef.current.invalidateQueries({ queryKey: chatQueryKeys.list });
-      joinAllRooms();
+      _clearUnread(queryClientRef.current, data.chatId);
     };
 
     const onTyping = (d: TypingEvent) => {
@@ -587,14 +573,21 @@ export const useGlobalChatListener = () => {
       _setTyping(d.chatId, d.userId, false);
     };
 
+    const onMessageDeleted = (data: { messageId: number; chatId: number; forEveryone: boolean }) => {
+      queryClientRef.current.setQueryData<Chat[]>(chatQueryKeys.list, (old) => {
+        if (!old) return old;
+        return old.map((chat) =>
+          chat.id !== data.chatId ? chat : { ...chat, messages: chat.messages.filter((m) => m.id !== data.messageId) }
+        );
+      });
+    };
+
     s.on('new_message',      onNewMessage);
     s.on('messages_read',    onMessagesRead);
     s.on('chat_deleted',     onChatDeleted);
     s.on('user_typing',      onTyping);
     s.on('user_stop_typing', onStopTyping);
-
-    const myId = meRef.current?.id;
-    if (myId) s.on(`new_chat:${myId}`, onNewChat);
+    s.on('message_deleted',  onMessageDeleted);
 
     return () => {
       s.off('new_message',      onNewMessage);
@@ -602,24 +595,60 @@ export const useGlobalChatListener = () => {
       s.off('chat_deleted',     onChatDeleted);
       s.off('user_typing',      onTyping);
       s.off('user_stop_typing', onStopTyping);
-      if (myId) s.off(`new_chat:${myId}`, onNewChat);
+      s.off('message_deleted',  onMessageDeleted);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket?.id]);
 
+  // new_chat — бэк шлёт { chatId } при новом сообщении в незнакомый чат.
+  useEffect(() => {
+    const s = socketRef.current;
+    if (!s) return;
+
+    const onNewChat = (data?: { chatId?: number }) => {
+      const qc = queryClientRef.current;
+      const chatId = data?.chatId;
+
+      if (chatId) {
+        joinedRooms.current.delete(chatId);
+        s.emit('join_chat', { chatId }, (res: any) => {
+          if (res?.success) joinedRooms.current.add(chatId);
+          qc.refetchQueries({ queryKey: chatQueryKeys.list });
+          qc.refetchQueries({ queryKey: chatQueryKeys.unreadPerChat });
+          qc.refetchQueries({ queryKey: chatQueryKeys.unreadCount });
+        });
+      } else {
+        qc.refetchQueries({ queryKey: chatQueryKeys.list });
+        qc.refetchQueries({ queryKey: chatQueryKeys.unreadPerChat });
+        qc.refetchQueries({ queryKey: chatQueryKeys.unreadCount });
+      }
+    };
+
+    s.on('new_chat', onNewChat);
+    return () => { s.off('new_chat', onNewChat); };
+  }, [socket?.id]);
+
+  // При потере соединения
   useEffect(() => {
     if (!isConnected) joinedRooms.current.clear();
   }, [isConnected]);
 
+  // При выходе на foreground
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state: AppStateStatus) => {
       if (state === 'active') {
-        queryClientRef.current.invalidateQueries({ queryKey: chatQueryKeys.list });
+        queryClientRef.current.refetchQueries({ queryKey: chatQueryKeys.list });
         joinAllRooms();
       }
     });
     return () => sub.remove();
   }, [joinAllRooms]);
+
+  // Начальный джоин
+  useEffect(() => {
+    joinAllRooms();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 };
 
 // ─── useGlobalTyping ─────────────────────────────────────────────────────────

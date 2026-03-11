@@ -32,12 +32,19 @@ export interface PinnedMessageSender {
   username: string;
 }
 
+/** Одна запись закрепа (вложенная структура от GET /chat/list и join_chat) */
 export interface PinnedMessage {
   id: number;
-  content: string | null;
-  type: MessageType;
+  chatId: number;
+  messageId: number;
+  userId: number;
   createdAt: string;
-  sender: PinnedMessageSender;
+  message: {
+    id: number;
+    content: string | null;
+    type: MessageType;
+    sender: PinnedMessageSender;
+  };
 }
 
 export interface Chat {
@@ -46,7 +53,7 @@ export interface Chat {
   updatedAt: string;
   participants: ChatParticipant[];
   messages: LastMessage[];
-  pinnedMessage: PinnedMessage | null;
+  pinnedMessages: PinnedMessage[];
 }
 
 // ─── Message ──────────────────────────────────────────────────────────────────
@@ -131,7 +138,7 @@ export interface EditMessageResponse {
 
 export interface PinMessageResponse {
   id: number;
-  pinnedMessage: PinnedMessage;
+  pinnedMessages: PinnedMessage[];
 }
 
 // ─── Socket events ────────────────────────────────────────────────────────────
@@ -159,17 +166,20 @@ export interface UnreadCountEvent {
 export interface MessageDeletedEvent {
   messageId: number;
   chatId: number;
+  forEveryone: boolean;
 }
 
 export interface MessageEditedEvent extends Message {}
 
 export interface MessagePinnedEvent {
   chatId: number;
-  pinnedMessage: PinnedMessage;
+  pinnedMessages: PinnedMessage[];
 }
 
 export interface MessageUnpinnedEvent {
   chatId: number;
+  messageId: number;
+  pinnedMessages: PinnedMessage[];
 }
 
 export interface ChatDeletedEvent {

@@ -8,10 +8,10 @@ export interface OtherUser {
 }
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
-
 export type AppStackParamList = {
   MainScreen: undefined;
   ChatScreen: { chatId: number; otherUser: OtherUser };
+  UserProfileScreen: { user: SearchUser };
 };
 
 export type RootStackParamList = {
@@ -20,14 +20,12 @@ export type RootStackParamList = {
 };
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
-
 export type AuthStackParamList = {
   KeyLoginScreen: undefined;
   LoginScreen: undefined;
 };
 
 // ─── Main tabs ────────────────────────────────────────────────────────────────
-
 export type MainTabParamList = {
   Chats: undefined;
   Friends: undefined;
@@ -35,13 +33,11 @@ export type MainTabParamList = {
 };
 
 // ─── Chats stack (only ChatsScreen now — ChatScreen is in AppStack) ───────────
-
 export type ChatsStackParamList = {
   ChatsScreen: undefined;
 };
 
 // ─── Search stack ─────────────────────────────────────────────────────────────
-
 export type SearchStackParamList = {
   SearchScreen: undefined;
   FriendRequestsScreen: undefined;
@@ -49,7 +45,6 @@ export type SearchStackParamList = {
 };
 
 // ─── Settings (Profile) stack ─────────────────────────────────────────────────
-
 export type SettingsStackParamList = {
   SettingsScreen: undefined;
   EditProfileScreen: undefined;
