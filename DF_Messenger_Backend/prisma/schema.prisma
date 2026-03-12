@@ -15,6 +15,7 @@ model User {
   username    String?  @unique
   description String?
   avatarUrl   String? @db.VarChar(512)
+  bannerUrl   String? @db.VarChar(512)
   isVerified  Boolean @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt()

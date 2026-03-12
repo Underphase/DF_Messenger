@@ -47,5 +47,10 @@ export class ProfileRepository {
 		})
 	}
 
-	
+	async saveBannerUrl(userId: number, bannerUrl: string) {
+		await this.prisma.user.update({
+			where: { id: userId },
+			data: { bannerUrl }
+		})
+	}
 }

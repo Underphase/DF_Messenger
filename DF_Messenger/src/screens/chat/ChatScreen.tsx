@@ -25,7 +25,7 @@ import {
   TouchableWithoutFeedback,
   View,
 } from "react-native";
-import DocumentPicker from "react-native-document-picker";
+import { pick } from '@react-native-documents/picker'
 import { launchCamera, launchImageLibrary } from "react-native-image-picker";
 import Icon from "react-native-vector-icons/Feather";
 import {
@@ -1518,11 +1518,12 @@ const MediaPickerSheet: React.FC<{
     if (a?.uri) onPick({ uri: a.uri, name: a.fileName ?? "photo.jpg", type: a.type ?? "image/jpeg", mediaType: "IMAGE" });
   };
   const pickAudio = async () => {
-    const r = await DocumentPicker.pickSingle({ type: [DocumentPicker.types.audio] });
+    const [r] = await pick({ type: ['audio/*'], allowMultiSelection: false });
     onPick({ uri: r.uri, name: r.name ?? "audio", type: r.type ?? "audio/mpeg", mediaType: "AUDIO" });
   };
+
   const pickFile = async () => {
-    const r = await DocumentPicker.pickSingle({ type: [DocumentPicker.types.allFiles] });
+    const [r] = await pick({ type: ['*/*'], allowMultiSelection: false });
     onPick({ uri: r.uri, name: r.name ?? "file", type: r.type ?? "application/octet-stream", mediaType: "FILE" });
   };
   const opts = [
@@ -1868,55 +1869,67 @@ const ChatScreen: React.FC = () => {
   return (
     <View style={s.container}>
       {/* Header */}
-      <View style={s.header}>
-        {isSelectMode ? (
-          <>
-            <TouchableOpacity style={s.iconBtn} onPress={exitSelectMode}>
-              <Icon name="x" size={20} color={colors.text} />
-            </TouchableOpacity>
-            <Text style={s.selectCount}>{selectedIds.size} выбрано</Text>
-            <View style={s.selectActions}>
-              <TouchableOpacity style={s.iconBtn} onPress={handleMultiCopy}>
-                <Icon name="copy" size={18} color={colors.text + "CC"} />
+      <View style={s.headerWrap}>
+        {otherUser.bannerUrl ? (
+          <Image
+            source={{ uri: otherUser.bannerUrl }}
+            style={s.headerBanner}
+            resizeMode="cover"
+            blurRadius={Platform.OS === 'ios' ? 20 : 4}
+          />
+        ) : null}
+        <View style={[s.headerOverlay, !otherUser.bannerUrl && s.headerOverlayNoBanner]} />
+ 
+        <View style={s.header}>
+          {isSelectMode ? (
+            <>
+              <TouchableOpacity style={s.iconBtn} onPress={exitSelectMode}>
+                <Icon name="x" size={20} color={colors.text} />
               </TouchableOpacity>
-              <TouchableOpacity style={s.iconBtn} onPress={handleMultiForwardRequest}>
-                <Icon name="share-2" size={18} color={colors.text + "CC"} />
-              </TouchableOpacity>
-              <TouchableOpacity style={s.iconBtn} onPress={handleMultiDelete}>
-                <Icon name="trash-2" size={18} color="#ff453a" />
-              </TouchableOpacity>
-            </View>
-          </>
-        ) : (
-          <>
-            <TouchableOpacity style={s.iconBtn} onPress={() => navigation.goBack()}>
-              <Icon name="arrow-left" size={22} color={colors.text} />
-            </TouchableOpacity>
-
-            <TouchableOpacity style={s.headerInfo} activeOpacity={0.75} onPress={handleOpenProfile}>
-              <View style={s.avatarWrap}>
-                {otherUser.avatarUrl ? (
-                  <Image source={{ uri: otherUser.avatarUrl }} style={s.headerAvatar} />
-                ) : (
-                  <View style={s.headerAvatarPh}>
-                    <Text style={s.headerAvatarIn}>{otherInitials}</Text>
-                  </View>
-                )}
-                {isOnline && <View style={s.onlineDot} />}
+              <Text style={s.selectCount}>{selectedIds.size} выбрано</Text>
+              <View style={s.selectActions}>
+                <TouchableOpacity style={s.iconBtn} onPress={handleMultiCopy}>
+                  <Icon name="copy" size={18} color={colors.text + 'CC'} />
+                </TouchableOpacity>
+                <TouchableOpacity style={s.iconBtn} onPress={handleMultiForwardRequest}>
+                  <Icon name="share-2" size={18} color={colors.text + 'CC'} />
+                </TouchableOpacity>
+                <TouchableOpacity style={s.iconBtn} onPress={handleMultiDelete}>
+                  <Icon name="trash-2" size={18} color="#ff453a" />
+                </TouchableOpacity>
               </View>
-              <View style={s.headerTextCol}>
-                <Text style={s.headerName} numberOfLines={1}>{otherUser.nickName}</Text>
-                <Text style={[s.headerStatus, isOnline && s.headerStatusOnline]}>
-                  {isOnline ? "онлайн" : `@${otherUser.username}`}
-                </Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={s.iconBtn} onPress={() => setSearchVisible((v) => !v)}>
-              <Icon name={searchVisible ? "x" : "search"} size={19} color={colors.text + "CC"} />
-            </TouchableOpacity>
-          </>
-        )}
+            </>
+          ) : (
+            <>
+              <TouchableOpacity style={s.iconBtn} onPress={() => navigation.goBack()}>
+                <Icon name="arrow-left" size={22} color={colors.text} />
+              </TouchableOpacity>
+ 
+              <TouchableOpacity style={s.headerInfo} activeOpacity={0.75} onPress={handleOpenProfile}>
+                <View style={s.avatarWrap}>
+                  {otherUser.avatarUrl ? (
+                    <Image source={{ uri: otherUser.avatarUrl }} style={s.headerAvatar} />
+                  ) : (
+                    <View style={s.headerAvatarPh}>
+                      <Text style={s.headerAvatarIn}>{otherInitials}</Text>
+                    </View>
+                  )}
+                  {isOnline && <View style={s.onlineDot} />}
+                </View>
+                <View style={s.headerTextCol}>
+                  <Text style={s.headerName} numberOfLines={1}>{otherUser.nickName}</Text>
+                  <Text style={[s.headerStatus, isOnline && s.headerStatusOnline]}>
+                    {isOnline ? 'онлайн' : `@${otherUser.username}`}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+ 
+              <TouchableOpacity style={s.iconBtn} onPress={() => setSearchVisible((v) => !v)}>
+                <Icon name={searchVisible ? 'x' : 'search'} size={19} color={colors.text + 'CC'} />
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
       </View>
 
       {searchVisible && !isSelectMode && (
@@ -2051,7 +2064,14 @@ const ChatScreen: React.FC = () => {
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  header: { flexDirection: "row", alignItems: "center", paddingTop: Platform.OS === "ios" ? 56 : 36, paddingBottom: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: colors.primary + "15", gap: 12 },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingTop: Platform.OS === "ios" ? 56 : 36,
+    paddingBottom: 14,
+    paddingHorizontal: 16,
+    gap: 12,
+  },
   iconBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: colors.secondary + "40", alignItems: "center", justifyContent: "center" },
   headerInfo: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
   avatarWrap: { position: "relative" },
@@ -2072,6 +2092,30 @@ const s = StyleSheet.create({
   input: { color: colors.text, fontSize: 15, lineHeight: 20 },
   sendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center", shadowColor: colors.accent, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 6 },
   sendBtnOff: { backgroundColor: colors.secondary + "40", shadowOpacity: 0, elevation: 0 },
+    headerWrap: {
+    position: "relative",
+    overflow: "hidden",
+    borderBottomWidth: 1,
+    borderBottomColor: colors.primary + "15",
+  },
+  headerBanner: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  headerOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(17, 13, 22, 0.78)",
+  },
+  headerOverlayNoBanner: {
+    backgroundColor: colors.background,
+  }
 });
 
 export default ChatScreen;

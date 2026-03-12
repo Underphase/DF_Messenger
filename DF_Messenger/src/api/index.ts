@@ -9,6 +9,7 @@ import {
   ProfileUpdateDto,
   ProfileUpdateResponse,
   AvatarUploadResponse,
+  BannerUploadResponse,
   ChangeEmailDto,
   ChangeEmailResponse,
   ConfirmChangeEmailDto,
@@ -90,6 +91,23 @@ export const userApi = {
     }).then(res => res.data);
   },
 
+  uploadBanner: (
+    file: { uri: string; name: string; type: string },
+    crop?: { x: number; y: number; width: number; height: number }
+  ) => {
+    const form = new FormData();
+    form.append('file', file as any);
+    if (crop) {
+      form.append('x', String(crop.x));
+      form.append('y', String(crop.y));
+      form.append('width', String(crop.width));
+      form.append('height', String(crop.height));
+    }
+    return api.post<BannerUploadResponse>('/user/me/bannerUpload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(res => res.data);
+  },
+
   // ── Email ───────────────────────────────────────────────────────────────────
   changeEmail: (dto: ChangeEmailDto) =>
     api.put<ChangeEmailResponse>('/user/me/email-change', dto)
@@ -129,7 +147,7 @@ export const friendsApi = {
       .get<MutualFriend[]>(`/friends/mutual/${targetId}`)
       .then((res) => res.data),
 
-  // ── Status — возвращает строку напрямую ──────────────────────────────────────
+  // ── Status ──────────────────────────────────────────────────────────────────
   getStatus: (targetId: number) =>
     api
       .get<FriendshipStatus>(`/friends/status/${targetId}`)
@@ -149,17 +167,14 @@ export const friendsApi = {
       .patch(`/friends/requests/${friendshipId}`, { action })
       .then((res) => res.data),
 
-  // { friendshipId, ...receiver }
   getSentRequests: () =>
     api.get<SentRequest[]>('/friends/requests/sent').then((res) => res.data),
 
-  // { friendshipId, ...sender }
   getReceivedRequests: () =>
     api
       .get<ReceivedRequest[]>('/friends/requests/received')
       .then((res) => res.data),
 
-  // { count: number }
   getRequestsCount: () =>
     api
       .get<RequestsCount>('/friends/requests/count')
@@ -176,18 +191,6 @@ export const friendsApi = {
     api.get<BlockedUser[]>('/friends/block').then((res) => res.data),
 };
 
-// ─── ADD these imports at the top of src/api/index.ts ────────────────────────
-//
-// import {
-//   Chat,
-//   CreateChatResponse,
-//   DeleteChatResponse,
-//   Message,
-//   UnreadCount,
-//   UnreadPerChat,
-// } from './chat.types';
-//
-// ─── ADD this export at the bottom of src/api/index.ts ───────────────────────
 import {
   Chat,
   CreateChatResponse,
@@ -198,17 +201,14 @@ import {
 } from './chat.types';
 
 export const chatApi = {
-  // POST /chat/create  → { id, participants, ... }
   createChat: (receiverId: number) =>
     api
       .post<CreateChatResponse>('/chat/create', { receiverId })
       .then((r) => r.data),
 
-  // GET /chat/list
   getUserChats: () =>
     api.get<Chat[]>('/chat/list').then((r) => r.data),
 
-  // DELETE /chat/delete
   deleteChat: (chatId: number, forEveryone: boolean) =>
     api
       .delete<DeleteChatResponse>('/chat/delete', {
@@ -216,23 +216,19 @@ export const chatApi = {
       })
       .then((r) => r.data),
 
-  // GET /chat/messages?chatId=
   getMessages: (chatId: number) =>
     api
       .get<Message[]>('/chat/messages', { params: { chatId } })
       .then((r) => r.data),
 
-  // GET /chat/messages/search?chatId=&q=
   searchMessages: (chatId: number, q: string) =>
     api
       .get<Message[]>('/chat/messages/search', { params: { chatId, q } })
       .then((r) => r.data),
 
-  // GET /chat/unread/count
   getUnreadCount: () =>
     api.get<UnreadCount>('/chat/unread/count').then((r) => r.data),
 
-  // GET /chat/unread/per-chat
   getUnreadPerChat: () =>
     api.get<UnreadPerChat[]>('/chat/unread/per-chat').then((r) => r.data),
 };

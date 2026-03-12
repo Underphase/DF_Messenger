@@ -32,7 +32,8 @@ export class FriendRepository {
 				username: true,
 				nickName: true,
 				description: true,
-				avatarUrl: true
+				avatarUrl: true,
+				bannerUrl: true
 			},
 			take: 10,
 			skip,
@@ -90,8 +91,8 @@ export class FriendRepository {
 				]
 			},
 			include: {
-				sender: {select: { id:  true, nickName: true, username: true, description: true, avatarUrl: true} },
-				receiver: {select: { id:  true, nickName: true, username: true, description: true, avatarUrl: true} }
+				sender: {select: { id:  true, nickName: true, username: true, description: true, avatarUrl: true, bannerUrl: true} },
+				receiver: {select: { id:  true, nickName: true, username: true, description: true, avatarUrl: true, bannerUrl: true} }
 			},
 			take: 10,
 			skip
@@ -130,7 +131,7 @@ export class FriendRepository {
 
     return this.prisma.user.findMany({
       where: { id: { in: mutualIds } },
-      select: { id: true, username: true, nickName: true, avatarUrl: true },
+      select: { id: true, username: true, nickName: true, avatarUrl: true, bannerUrl: true },
     })
   }
 
@@ -138,7 +139,7 @@ export class FriendRepository {
 			const friendships = await this.prisma.friendship.findMany({
 					where: { status: "PENDING", senderId: userId },
 					include: {
-							receiver: { select: { id: true, nickName: true, username: true, description: true, avatarUrl: true } }
+							receiver: { select: { id: true, nickName: true, username: true, description: true, avatarUrl: true, bannerUrl: true } }
 					}
 			})
 
@@ -149,7 +150,7 @@ export class FriendRepository {
 			const friendships = await this.prisma.friendship.findMany({
 					where: { status: "PENDING", receiverId: userId },
 					include: {
-							sender: { select: { id: true, nickName: true, username: true, description: true, avatarUrl: true } }
+							sender: { select: { id: true, nickName: true, username: true, description: true, avatarUrl: true, bannerUrl: true } }
 					}
 			})
 
@@ -261,7 +262,7 @@ export class FriendRepository {
     const blocks = await this.prisma.block.findMany({
       where: { blockerId },
       include: {
-        blocked: { select: { id: true, username: true, nickName: true, avatarUrl: true } }
+        blocked: { select: { id: true, username: true, nickName: true, avatarUrl: true, bannerUrl: true } }
       },
 			take: 10,
 			skip

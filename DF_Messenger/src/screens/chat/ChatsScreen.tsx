@@ -41,7 +41,13 @@ const getOtherUser = (chat: Chat, myId: number): OtherUser | null => {
   const other = chat.participants.find((p) => p.user?.id !== myId);
   const u     = other?.user ?? chat.participants[0]?.user;
   if (!u?.id) return null;
-  return { id: u.id, nickName: u.nickName ?? '...', username: u.username ?? '...', avatarUrl: u.avatarUrl ?? null };
+  return {
+    id: u.id,
+    nickName: u.nickName ?? '...',
+    username: u.username ?? '...',
+    avatarUrl: u.avatarUrl ?? null,
+    bannerUrl: (u as any).bannerUrl ?? null,
+  };
 };
 
 const formatTime = (dateStr: string) => {

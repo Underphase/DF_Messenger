@@ -1,12 +1,17 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, PutBucketPolicyCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { Injectable } from '@nestjs/common'
-
+import { Injectable, OnModuleInit } from '@nestjs/common'
+import ffmpeg from 'fluent-ffmpeg'
+import { Readable } from 'stream'
+import * as fs from 'fs'
+import * as path from 'path'
+import * as os from 'os'
+import sharp from 'sharp'
 
 const bucketText = 'avatars';
 
 @Injectable()
-export class MinioService {
+export class MinioService implements OnModuleInit {
 	private client: S3Client;
 
 	constructor() {
@@ -21,15 +26,85 @@ export class MinioService {
 		});
 	}
 
-	async uploadFile(key: string, file: Buffer, mimetype: string){
+	async onModuleInit() {
+    await this.ensurePublicBucket('avatars')
+    await this.ensurePublicBucket('banners')
+	}
+
+	  private async ensurePublicBucket(bucket: string) {
+    try {
+      await this.client.send(new HeadBucketCommand({ Bucket: bucket }))
+    } catch {
+      await this.client.send(new HeadBucketCommand({ Bucket: bucket }))
+    }
+
+    const policy = {
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Effect: 'Allow',
+          Principal: { AWS: ['*'] },
+          Action: ['s3:GetObject'],
+          Resource: [`arn:aws:s3:::${bucket}/*`]
+        }
+      ]
+    }
+
+    await this.client.send(new PutBucketPolicyCommand({
+      Bucket: bucket,
+      Policy: JSON.stringify(policy)
+    }))
+  }
+
+	async cropImage(
+  fileBuffer: Buffer,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+	): Promise<Buffer> {
+		return sharp(fileBuffer)
+			.extract({ left: x, top: y, width, height })
+			.toBuffer()
+	}
+
+	async cropGif(
+		fileBuffer: Buffer,
+		x: number,
+		y: number,
+		width: number,
+		height: number
+	): Promise<Buffer> {
+		const tmpDir = os.tmpdir()
+		const inputPath = path.join(tmpDir, `input_${Date.now()}.gif`)
+		const outputPath = path.join(tmpDir, `output_${Date.now()}.gif`)
+
+		fs.writeFileSync(inputPath, fileBuffer)
+
+		await new Promise<void>((resolve, reject) => {
+			ffmpeg(inputPath)
+				.videoFilters(`crop=${width}:${height}:${x}:${y}`)
+				.output(outputPath)
+				.on('end', () => resolve())
+				.on('error', (err) => reject(err))
+				.run()
+		})
+
+		const result = fs.readFileSync(outputPath)
+		fs.unlinkSync(inputPath)
+		fs.unlinkSync(outputPath)
+
+		return result
+	}
+
+	async uploadFile(bucket: string, key: string, file: Buffer, mimetype: string) {
 		const command = new PutObjectCommand({
-			Bucket: bucketText,
+			Bucket: bucket,
 			Key: key,
 			Body: file,
 			ContentType: mimetype
 		})
-
-		await this.client.send(command);
+		await this.client.send(command)
 	}
 
 	async getFile(key: string) {

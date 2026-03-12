@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Platform,
   ScrollView,
   StyleSheet,
@@ -13,28 +12,24 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Feather';
-import { launchImageLibrary } from 'react-native-image-picker';
 import { colors } from '../../styles/colors';
-import { useMe, useUpdateProfile, useUploadAvatar } from '../../hooks/user.hook';
+import { useMe, useUpdateProfile } from '../../hooks/user.hook';
 
 const DESCRIPTION_LIMIT = 80;
 
 const EditProfileScreen = () => {
   const navigation = useNavigation();
   const { data: user } = useMe();
-  const { mutateAsync: updateProfile,  isPending: isSaving          } = useUpdateProfile();
-  const { mutateAsync: uploadAvatar,   isPending: isUploadingAvatar  } = useUploadAvatar();
+  const { mutateAsync: updateProfile, isPending: isSaving } = useUpdateProfile();
 
   const [nickName,    setNickName]    = useState('');
   const [username,    setUsername]    = useState('');
   const [description, setDescription] = useState('');
   const [errors,      setErrors]      = useState<Record<string, string>>({});
 
-  // Флаг — поля уже были заполнены из user, больше не перезаписываем
   const initializedRef = useRef(false);
 
   useEffect(() => {
-    // Заполняем ТОЛЬКО один раз при первой загрузке данных
     if (user && !initializedRef.current) {
       setNickName(user.nickName);
       setUsername(user.username);
@@ -43,53 +38,15 @@ const EditProfileScreen = () => {
     }
   }, [user]);
 
-  // ── Avatar picker ────────────────────────────────────────────────────────────
-  const handlePickAvatar = async () => {
-    const result = await launchImageLibrary({
-      mediaType: 'photo',
-      quality: 1,
-      maxWidth: 512,
-      maxHeight: 512,
-    });
-
-    if (result.didCancel || !result.assets?.[0]) return;
-
-    const asset = result.assets[0];
-    if (!asset.uri || !asset.type || !asset.fileName) return;
-
-    try {
-      await uploadAvatar({
-        uri: asset.uri,
-        type: asset.type,
-        name: asset.fileName,
-      });
-      // Поля nickName/username/description НЕ трогаем — баг исправлен
-    } catch (err: any) {
-      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось загрузить аватарку');
-    }
-  };
-
-  // ── Save ─────────────────────────────────────────────────────────────────────
   const handleSave = async () => {
     const newErrors: Record<string, string> = {};
 
-    if (nickName.trim().length === 0) {
-      newErrors.nickName = 'Имя не может быть пустым';
-    }
-    if (username.trim().length === 0) {
-      newErrors.username = 'Никнейм не может быть пустым';
-    }
-    if (!/^[a-zA-Z0-9_]+$/.test(username)) {
-      newErrors.username = 'Только буквы, цифры и _';
-    }
-    if (description.length > DESCRIPTION_LIMIT) {
-      newErrors.description = `Максимум ${DESCRIPTION_LIMIT} символов`;
-    }
+    if (nickName.trim().length === 0) newErrors.nickName = 'Имя не может быть пустым';
+    if (username.trim().length === 0) newErrors.username = 'Никнейм не может быть пустым';
+    if (!/^[a-zA-Z0-9_]+$/.test(username)) newErrors.username = 'Только буквы, цифры и _';
+    if (description.length > DESCRIPTION_LIMIT) newErrors.description = `Максимум ${DESCRIPTION_LIMIT} символов`;
 
-    if (Object.keys(newErrors).length > 0) {
-      setErrors(newErrors);
-      return;
-    }
+    if (Object.keys(newErrors).length > 0) { setErrors(newErrors); return; }
 
     try {
       setErrors({});
@@ -108,13 +65,6 @@ const EditProfileScreen = () => {
       }
     }
   };
-
-  const initials = user
-    ? user.nickName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()
-    : '?';
-
-  // Показываем аватар: если идёт загрузка — берём из user (уже обновлён через setQueryData)
-  const avatarUrl = user?.avatarUrl;
 
   return (
     <View style={styles.container}>
@@ -136,22 +86,12 @@ const EditProfileScreen = () => {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Avatar */}
-        <TouchableOpacity style={styles.avatarSection} onPress={handlePickAvatar} activeOpacity={0.8}>
-          {avatarUrl ? (
-            <Image source={{ uri: avatarUrl }} style={styles.avatar} />
-          ) : (
-            <View style={styles.avatarPlaceholder}>
-              <Text style={styles.avatarInitials}>{initials}</Text>
-            </View>
-          )}
-          <View style={styles.avatarEditBadge}>
-            {isUploadingAvatar
-              ? <ActivityIndicator size="small" color={colors.text} />
-              : <Icon name="camera" size={16} color={colors.text} />}
-          </View>
-          <Text style={styles.avatarHint}>Нажмите чтобы сменить</Text>
-        </TouchableOpacity>
+
+        {/* Hint */}
+        <View style={styles.hintRow}>
+          <Icon name="info" size={14} color={colors.accent + '80'} />
+          <Text style={styles.hintText}>Аватар и баннер можно сменить на главном экране профиля</Text>
+        </View>
 
         {/* Fields */}
         <View style={styles.fieldsCard}>
@@ -200,10 +140,7 @@ const EditProfileScreen = () => {
           <View style={styles.fieldBlock}>
             <View style={styles.fieldLabelRow}>
               <Text style={styles.fieldLabel}>О себе</Text>
-              <Text style={[
-                styles.charCount,
-                description.length > DESCRIPTION_LIMIT && styles.charCountOver,
-              ]}>
+              <Text style={[styles.charCount, description.length > DESCRIPTION_LIMIT && styles.charCountOver]}>
                 {description.length}/{DESCRIPTION_LIMIT}
               </Text>
             </View>
@@ -223,7 +160,6 @@ const EditProfileScreen = () => {
           </View>
         </View>
 
-        {/* API error */}
         {errors.api && (
           <View style={styles.apiError}>
             <Icon name="alert-circle" size={16} color="#ff6b6b" />
@@ -260,29 +196,20 @@ const styles = StyleSheet.create({
   saveBtnText: { color: colors.accent, fontWeight: '700', fontSize: 15 },
   scrollContent: { padding: 20 },
 
-  // Avatar
-  avatarSection: { alignItems: 'center', marginBottom: 28 },
-  avatar: {
-    width: 96, height: 96, borderRadius: 48,
-    borderWidth: 3, borderColor: colors.accent + '60',
+  hintRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.accent + '12',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.accent + '30',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 20,
   },
-  avatarPlaceholder: {
-    width: 96, height: 96, borderRadius: 48,
-    backgroundColor: colors.secondary + '60',
-    borderWidth: 3, borderColor: colors.accent + '40',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  avatarInitials: { fontSize: 32, fontWeight: '700', color: colors.text },
-  avatarEditBadge: {
-    position: 'absolute', bottom: 28, right: '34%',
-    width: 30, height: 30, borderRadius: 15,
-    backgroundColor: colors.accent,
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 2, borderColor: colors.background,
-  },
-  avatarHint: { marginTop: 10, fontSize: 13, color: colors.primary + '70' },
+  hintText: { fontSize: 13, color: colors.accent + 'CC', flex: 1, lineHeight: 18 },
 
-  // Fields
   fieldsCard: {
     backgroundColor: colors.secondary + '25', borderRadius: 20,
     borderWidth: 1, borderColor: colors.primary + '15',
@@ -290,10 +217,7 @@ const styles = StyleSheet.create({
   },
   fieldBlock: { paddingVertical: 12 },
   fieldSeparator: { height: 1, backgroundColor: colors.primary + '12' },
-  fieldLabelRow: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', marginBottom: 8,
-  },
+  fieldLabelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   fieldLabel: {
     fontSize: 12, fontWeight: '700', color: colors.primary + '80',
     letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 8,

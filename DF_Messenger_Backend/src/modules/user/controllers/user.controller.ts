@@ -75,5 +75,12 @@ export class UserController {
     return await this.userService.confirmChangePassword(dto, req.user.userId)
   }
 
+  // BANNER
 
+  @Post('me/bannerUpload')
+  @UseGuards(JwtGuard)
+  @UseInterceptors(FileInterceptor('file'))
+  async changeBanner(@UploadedFile() file: Express.Multer.File, @Req() req) {
+    return this.userService.changeBanner(req.user.userId, file)
+  }
 }

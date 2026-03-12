@@ -51,8 +51,6 @@ export const useLogout = () => {
           console.warn('[useLogout] Server revocation failed:', err);
         }
       }
-      // signOut clears tokens + sets authState → unauthenticated
-      // RootNavigator reacts and switches to LoginScreen automatically
       await signOut();
     },
     onSuccess: () => {
@@ -69,7 +67,6 @@ export const useUpdateProfile = () => {
   return useMutation({
     mutationFn: (dto: ProfileUpdateDto) => userApi.updateProfile(dto),
     onSuccess: () => {
-      // Refetch fresh user data after update
       queryClient.invalidateQueries({ queryKey: userQueryKeys.me });
     },
   });
@@ -84,10 +81,31 @@ export const useUploadAvatar = () => {
     mutationFn: (file: { uri: string; name: string; type: string }) =>
       userApi.uploadAvatar(file),
     onSuccess: (data) => {
-      // Update the cached user directly — no extra network request needed
       queryClient.setQueryData(userQueryKeys.me, (old: any) => {
         if (!old) return old;
-        return { ...old, avatarUrl: data.avatarUrl };
+        return { ...old, avatarUrl: data.avatarUrl, updatedAt: new Date().toISOString() };
+      });
+    },
+  });
+};
+
+// ─── useUploadBanner ──────────────────────────────────────────────────────────
+
+export const useUploadBanner = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      file,
+      crop,
+    }: {
+      file: { uri: string; name: string; type: string };
+      crop?: { x: number; y: number; width: number; height: number };
+    }) => userApi.uploadBanner(file, crop),
+    onSuccess: (data) => {
+      queryClient.setQueryData(userQueryKeys.me, (old: any) => {
+        if (!old) return old;
+        return { ...old, bannerUrl: data.bannerUrl, updatedAt: new Date().toISOString() };
       });
     },
   });

@@ -186,6 +186,7 @@ const SearchScreen = () => {
       username: friend.username,
       description: friend.description,
       avatarUrl: friend.avatarUrl,
+      bannerUrl: friend.bannerUrl,
     };
     navigation.navigate('UserProfileScreen', { user: asUser });
   };

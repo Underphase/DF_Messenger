@@ -57,12 +57,10 @@ export class UserService {
 
 	async changeAvatar(userId: number, file: Express.Multer.File) {
 		const key = `${userId}.${file.mimetype.split('/')[1]}`
-
-		await this.minio.uploadFile(key, file.buffer, file.mimetype)
+		await this.minio.uploadFile('avatars', key, file.buffer, file.mimetype)
 		await this.profile.saveUserAvatarUrl(userId, `${process.env.AVATARS_PATH}/${key}`)
-
 		return {
-			message: "Аватарка успешно изменена",
+			message: 'Аватарка успешно изменена',
 			avatarUrl: `${process.env.AVATARS_PATH}/${key}`
 		}
 	}
@@ -127,5 +125,13 @@ export class UserService {
 		}
 	}
 
-
+	async changeBanner(userId: number, file: Express.Multer.File) {
+		const key = `${userId}.${file.mimetype.split('/')[1]}`
+		await this.minio.uploadFile('banners', key, file.buffer, file.mimetype)
+		await this.profile.saveBannerUrl(userId, `${process.env.BANNERS_PATH}/${key}`)
+		return {
+			message: 'Баннер успешно изменён',
+			bannerUrl: `${process.env.BANNERS_PATH}/${key}`
+		}
+	}
 }

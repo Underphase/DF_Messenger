@@ -5,6 +5,7 @@ export interface OtherUser {
   nickName: string;
   username: string;
   avatarUrl: string | null;
+  bannerUrl?: string | null;
 }
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
@@ -32,7 +33,7 @@ export type MainTabParamList = {
   Profile: undefined;
 };
 
-// ─── Chats stack (only ChatsScreen now — ChatScreen is in AppStack) ───────────
+// ─── Chats stack ──────────────────────────────────────────────────────────────
 export type ChatsStackParamList = {
   ChatsScreen: undefined;
 };
