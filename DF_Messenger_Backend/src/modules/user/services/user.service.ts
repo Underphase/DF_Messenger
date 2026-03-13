@@ -6,7 +6,7 @@ import { MinioService } from '../../../db/minio/minio.service'
 import { RedisService } from '../../../db/redis/redis.service'
 import { CommonService } from '../../../utils/common.service'
 import { MailService } from '../../mail/mail.service'
-import { changeEmailDto, changePasswordDto, confirmChangeEmailDto, confirmChangePasswordDto, getRefreshDto, profileUpdateDto } from '../dto/common.dto'
+import { changeEmailDto, changePasswordDto, confirmChangeEmailDto, confirmChangePasswordDto, confirmForgotPasswordDto, forgotPassworDto, getRefreshDto, profileUpdateDto } from '../dto/common.dto'
 import { ProfileRepository } from '../repositories/profile.repository'
 import { RefreshTokenRepository } from '../repositories/refreshToken.repository'
 import { UserRepository } from '../repositories/user.repository'
@@ -132,6 +132,30 @@ export class UserService {
 		return {
 			message: 'Баннер успешно изменён',
 			bannerUrl: `${process.env.BANNERS_PATH}/${key}`
+		}
+	}
+
+	async forgotPassword(dto: forgotPassworDto) {
+  const user = await this.userRepo.getUserFromMail(dto.email)
+  if (!user) throw new NotFoundException('Пользователь с такой почтой не найден')
+
+  const code = await this.redis.generateTemporaryCode(dto.email, 60)
+  await this.mail.sendEmail('DF_Messenger', dto.email, 'Код для восстановления пароля', code)
+
+  return { message: 'Код для восстановления пароля отправлен на почту' }
+}
+
+	async confirmForgotPassword(dto: confirmForgotPasswordDto) {
+		if (await this.redis.confirmTemporaryCode(dto.email, dto.code)) {
+			const user = await this.userRepo.getUserFromMail(dto.email)
+			if (!user) throw new NotFoundException('Пользователь не найден')
+
+			const hashedPass = await bcrypt.hash(dto.newPassword, 10)
+			await this.profile.changePassword(user.id, hashedPass)
+
+			return { message: 'Пароль успешно изменён' }
+		} else {
+			throw new ConflictException('Неверный код!')
 		}
 	}
 }

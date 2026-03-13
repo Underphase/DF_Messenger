@@ -32,3 +32,19 @@ export const useSendCode = () => {
     }
   })
 }
+
+export const useForgotPassword = () => {
+  return useMutation({
+    mutationFn: ({ email }: { email: string }) => {
+      return loginApi.forgotPassword(email)
+    }
+  })
+}
+
+export const useConfirmForgotPassword = () => {
+  return useMutation({
+    mutationFn: ({ email, code, newPassword }: { email: string; code: string; newPassword: string }) => {
+      return loginApi.confirmForgotPassword(email, code, newPassword)
+    }
+  })
+}

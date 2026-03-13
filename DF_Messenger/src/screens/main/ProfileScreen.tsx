@@ -107,6 +107,13 @@ const ProfileHome = () => {
       if (isGif) {
         // GIF — отправляем оригинал, кроп не нужен
         const name = preview.path.split('/').pop() ?? 'banner.gif';
+        console.log('BANNER UPLOAD PAYLOAD:', JSON.stringify({
+          uri: preview.path,
+          type: 'image/gif',
+          name: preview.path.split('/').pop(),
+          size: preview.size,
+          mime: preview.mime,
+        }));
         await uploadBanner({
           file: { uri: preview.path, type: 'image/gif', name },
         });
@@ -142,7 +149,14 @@ const ProfileHome = () => {
       await uploadBanner({ file: { uri: cropped.path, type, name }, crop });
     } catch (err: any) {
       if (err?.code === 'E_PICKER_CANCELLED') return;
-      console.log('BANNER ERROR:', JSON.stringify(err?.response?.data), err?.message);
+      console.log('BANNER ERROR FULL:', JSON.stringify({
+        message: err?.message,
+        code: err?.code,
+        status: err?.response?.status,
+        data: err?.response?.data,
+        config_url: err?.config?.url,
+        config_baseURL: err?.config?.baseURL,
+      }));
       Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось загрузить баннер');
     } finally {
       setIsPickingBanner(false);

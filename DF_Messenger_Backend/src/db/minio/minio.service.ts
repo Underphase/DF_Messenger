@@ -68,35 +68,6 @@ export class MinioService implements OnModuleInit {
 			.toBuffer()
 	}
 
-	async cropGif(
-		fileBuffer: Buffer,
-		x: number,
-		y: number,
-		width: number,
-		height: number
-	): Promise<Buffer> {
-		const tmpDir = os.tmpdir()
-		const inputPath = path.join(tmpDir, `input_${Date.now()}.gif`)
-		const outputPath = path.join(tmpDir, `output_${Date.now()}.gif`)
-
-		fs.writeFileSync(inputPath, fileBuffer)
-
-		await new Promise<void>((resolve, reject) => {
-			ffmpeg(inputPath)
-				.videoFilters(`crop=${width}:${height}:${x}:${y}`)
-				.output(outputPath)
-				.on('end', () => resolve())
-				.on('error', (err) => reject(err))
-				.run()
-		})
-
-		const result = fs.readFileSync(outputPath)
-		fs.unlinkSync(inputPath)
-		fs.unlinkSync(outputPath)
-
-		return result
-	}
-
 	async uploadFile(bucket: string, key: string, file: Buffer, mimetype: string) {
 		const command = new PutObjectCommand({
 			Bucket: bucket,

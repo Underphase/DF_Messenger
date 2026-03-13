@@ -35,6 +35,7 @@ export interface SentRequest {
   username: string;
   description: string | null;
   avatarUrl: string | null;
+  bannerUrl?: string | null;
 }
 
 // ─── Received request (GET /friends/requests/received) ───────────────────────
@@ -45,6 +46,7 @@ export interface ReceivedRequest {
   username: string;
   description: string | null;
   avatarUrl: string | null;
+  bannerUrl?: string | null;
 }
 
 // ─── Blocked user (GET /friends/block) ───────────────────────────────────────
@@ -67,4 +69,5 @@ export interface MutualFriend {
   nickName: string;
   username: string;
   avatarUrl: string | null;
+  bannerUrl?: string | null;
 }

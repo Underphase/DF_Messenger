@@ -20,6 +20,7 @@
     "axios": "^1.13.4",
     "react": "19.2.0",
     "react-native": "0.83.1",
+    "react-native-audio-record": "^0.2.2",
     "react-native-dotenv": "^3.4.11",
     "react-native-fast-image": "^8.6.3",
     "react-native-gesture-handler": "^2.30.0",

@@ -47,3 +47,19 @@ const confirmChangePasswordSchema = z.object({
 
 export class confirmChangePasswordDto extends createZodDto(confirmChangePasswordSchema) {}
 export type confirmChangePassword = z.infer<typeof confirmChangePasswordSchema>
+
+const forgotPasswordSchema = z.object({
+	email: z.string().nonempty().max(320, 'Нельзя превышать 320 символов!'),
+})
+
+export class forgotPassworDto extends createZodDto(forgotPasswordSchema) {}
+export type forgotPassword = z.infer<typeof forgotPasswordSchema>
+
+const confirmForgotPasswordSchema = z.object({
+	email: z.string().nonempty().max(320, 'Нельзя превышать 320 символов!'),
+	code: z.string().length(6),
+	newPassword: z.string().nonempty('Поле не может быть пустым').min(8, 'Пароль должен состоять как минимум из 8 символов').max(70, 'Пароль не должен превышать 70 символов').trim()
+})
+
+export class confirmForgotPasswordDto extends createZodDto(confirmForgotPasswordSchema) {}
+export type confirmForgotPassword = z.infer<typeof confirmForgotPasswordSchema>

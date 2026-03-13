@@ -1,7 +1,7 @@
 export { api } from './client';
 export { getTokens, saveTokens, clearTokens } from './client';
 import { DeviceCreate, DeviceGet, Key } from './key.types';
-import { register, login, verify, sendCode } from './login.types';
+import { register, login, verify, sendCode, forgotPassword, confirmForgotPassword } from './login.types';
 import {
   UserMe,
   TokenPair,
@@ -61,6 +61,14 @@ export const loginApi = {
 
   sendCode: (email: string) =>
     api.post<sendCode>('/auth/sendCode', { email })
+      .then(res => res.data),
+
+  forgotPassword: (email: string) =>
+    api.post<forgotPassword>('/user/forgot-password', { email })
+      .then(res => res.data),
+
+  confirmForgotPassword: (email: string, code: string, newPassword: string) =>
+    api.post<confirmForgotPassword>('/user/forgot-password/confirm', { email, code, newPassword })
       .then(res => res.data),
 };
 

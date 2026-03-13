@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Post, Put, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
 import { JwtGuard } from '../../../guards/jwt.guard'
-import { changeEmailDto, changePasswordDto, confirmChangeEmailDto, confirmChangePasswordDto, getRefreshDto, profileUpdateDto } from '../dto/common.dto'
+import { changeEmailDto, changePasswordDto, confirmChangeEmailDto, confirmChangePasswordDto, confirmForgotPasswordDto, forgotPassworDto, getRefreshDto, profileUpdateDto } from '../dto/common.dto'
 import { UserService } from '../services/user.service'
 
 
@@ -82,5 +82,17 @@ export class UserController {
   @UseInterceptors(FileInterceptor('file'))
   async changeBanner(@UploadedFile() file: Express.Multer.File, @Req() req) {
     return this.userService.changeBanner(req.user.userId, file)
+  }
+
+  // Forgot pass
+
+  @Post('forgot-password')
+  async forgotPassword(@Body() dto: forgotPassworDto) {
+    return this.userService.forgotPassword(dto)
+  }
+
+  @Post('forgot-password/confirm')
+  async confirmForgotPassword(@Body() dto: confirmForgotPasswordDto) {
+    return this.userService.confirmForgotPassword(dto)
   }
 }

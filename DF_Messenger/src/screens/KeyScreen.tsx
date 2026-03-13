@@ -34,18 +34,16 @@ const KeyScreen: React.FC<Props> = ({ navigation }) => {
 
   const { mutateAsync: createDevice } = useCreateDevice();
   const { mutate: verify } = useVerifyKey();
-  // ── Animations ──────────────────────────────────────────────────────────────
-  const logoScale    = useRef(new Animated.Value(0)).current;
-  const logoRotate   = useRef(new Animated.Value(0)).current;
-  const formOpacity  = useRef(new Animated.Value(0)).current;
-  const formSlide    = useRef(new Animated.Value(40)).current;
-  const shakeX       = useRef(new Animated.Value(0)).current;
 
-  // Pulsing glow on the icon circle
-  const glowOpacity  = useRef(new Animated.Value(0.3)).current;
+  // ── Animations ──────────────────────────────────────────────────────────────
+  const logoScale   = useRef(new Animated.Value(0)).current;
+  const logoRotate  = useRef(new Animated.Value(0)).current;
+  const formOpacity = useRef(new Animated.Value(0)).current;
+  const formSlide   = useRef(new Animated.Value(40)).current;
+  const shakeX      = useRef(new Animated.Value(0)).current;
+  const glowOpacity = useRef(new Animated.Value(0.3)).current;
 
   useEffect(() => {
-    // Logo entrance
     Animated.parallel([
       Animated.spring(logoScale, {
         toValue: 1,
@@ -61,7 +59,6 @@ const KeyScreen: React.FC<Props> = ({ navigation }) => {
       }),
     ]).start();
 
-    // Form entrance
     Animated.parallel([
       Animated.timing(formOpacity, {
         toValue: 1,
@@ -78,7 +75,6 @@ const KeyScreen: React.FC<Props> = ({ navigation }) => {
       }),
     ]).start();
 
-    // Idle pulsing glow
     const pulse = Animated.loop(
       Animated.sequence([
         Animated.timing(glowOpacity, {
@@ -205,13 +201,15 @@ const KeyScreen: React.FC<Props> = ({ navigation }) => {
   // ── Main UI ──────────────────────────────────────────────────────────────────
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
     >
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
       >
         {/* Logo */}
         <Animated.View
@@ -225,7 +223,6 @@ const KeyScreen: React.FC<Props> = ({ navigation }) => {
             },
           ]}
         >
-          {/* Pulsing outer glow ring */}
           <Animated.View style={[styles.logoGlow, { opacity: glowOpacity }]} />
           <View style={styles.logoCircle}>
             <Icon name="key" size={48} color={colors.primary} />
@@ -307,10 +304,11 @@ const KeyScreen: React.FC<Props> = ({ navigation }) => {
           </TouchableOpacity>
         </Animated.View>
 
-        {/* Decorative circles (same as LoginScreen) */}
-        <View style={styles.decorativeCircle1} />
-        <View style={styles.decorativeCircle2} />
       </ScrollView>
+
+      {/* Декоративные шары — поверх скролла, не двигаются */}
+      <View style={styles.decorativeCircle1} pointerEvents="none" />
+      <View style={styles.decorativeCircle2} pointerEvents="none" />
     </KeyboardAvoidingView>
   );
 };
@@ -329,7 +327,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 24,
     paddingTop: 60,
-    paddingBottom: 40,
+    paddingBottom: Platform.OS === 'android' ? 80 : 6,
   },
 
   // Loading
@@ -351,7 +349,6 @@ const styles = StyleSheet.create({
     height: 120,
     borderRadius: 60,
     backgroundColor: colors.accent,
-    // softens into the background
     opacity: 0.3,
   },
   logoCircle: {
@@ -363,7 +360,7 @@ const styles = StyleSheet.create({
     borderColor: colors.primary + '40',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 12
+    marginTop: 12,
   },
   logoText: {
     fontSize: 32,

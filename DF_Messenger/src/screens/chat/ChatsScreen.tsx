@@ -99,7 +99,7 @@ const DeleteMenu: React.FC<DeleteMenuProps> = ({ chat, myId, onClose, onDeleteSe
   const initials = other.nickName.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 
   return (
-    <Modal transparent animationType="none" visible={!!chat} onRequestClose={() => dismiss()}>
+    <Modal transparent animationType="none" visible={!!chat} onRequestClose={() => dismiss()} statusBarTranslucent>
       <Animated.View style={[dm.backdrop, { opacity }]} pointerEvents="box-none">
         <TouchableWithoutFeedback onPress={() => dismiss()}>
           <View style={StyleSheet.absoluteFillObject} />
@@ -181,11 +181,11 @@ const ChatItem: React.FC<{
   onPress: () => void;
   onLongPress: () => void;
 }> = ({ chat, myId, unreadCount, isTyping, onPress, onLongPress }) => {
-  const other     = getOtherUser(chat, myId);
+  const other        = getOtherUser(chat, myId);
   const { isOnline } = useUserOnlineStatus(other?.id ?? 0);
-  const last      = chat.messages[0];
-  const hasUnread = unreadCount > 0;
-  const initials  = (other?.nickName ?? '?').split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+  const last         = chat.messages[0];
+  const hasUnread    = unreadCount > 0;
+  const initials     = (other?.nickName ?? '?').split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
   if (!other) return null;
   const hasPinned = Array.isArray(chat.pinnedMessages) && chat.pinnedMessages.length > 0;
 
@@ -267,6 +267,35 @@ const FriendsPicker: React.FC<{
   onSelect: (f: Friend, existingChatId?: number) => void;
 }> = ({ visible, onClose, existingChats, myId, onSelect }) => {
   const { data: friends, isLoading } = useFriends();
+  const slideY = useRef(new Animated.Value(400)).current;
+  const fade   = useRef(new Animated.Value(0)).current;
+
+  // mounted отдельно от visible:
+  // - при открытии: сначала маунтим, потом анимируем вход
+  // - при закрытии: сначала анимируем выход, потом анмаунтим
+  // Без этого if (!visible) return null убивает компонент до конца анимации
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    if (visible) {
+      setMounted(true);
+      // Сбрасываем в исходное положение перед каждым открытием
+      slideY.setValue(400);
+      fade.setValue(0);
+      Animated.parallel([
+        Animated.spring(slideY, { toValue: 0, useNativeDriver: true, tension: 75, friction: 12 }),
+        Animated.timing(fade,   { toValue: 1, duration: 200, useNativeDriver: true }),
+      ]).start();
+    } else {
+      // Анимируем выход, анмаунтим только после завершения
+      Animated.parallel([
+        Animated.timing(slideY, { toValue: 400, duration: 220, useNativeDriver: true }),
+        Animated.timing(fade,   { toValue: 0,   duration: 180, useNativeDriver: true }),
+      ]).start(() => setMounted(false));
+    }
+  }, [visible]);
+
+  if (!mounted) return null;
 
   const findExisting = (fid: number) =>
     existingChats.find((c) =>
@@ -275,9 +304,20 @@ const FriendsPicker: React.FC<{
     )?.id;
 
   return (
-    <Modal transparent visible={visible} animationType="slide" onRequestClose={onClose}>
-      <TouchableWithoutFeedback onPress={onClose}><View style={fp.backdrop} /></TouchableWithoutFeedback>
-      <View style={fp.sheet}>
+    <Modal
+      transparent
+      animationType="none"
+      visible={mounted}
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      {/* Backdrop — absoluteFillObject покрывает статус-бар на Android */}
+      <TouchableWithoutFeedback onPress={onClose}>
+        <Animated.View style={[fp.backdrop, { opacity: fade }]} />
+      </TouchableWithoutFeedback>
+
+      {/* Sheet с анимацией slide снизу */}
+      <Animated.View style={[fp.sheet, { transform: [{ translateY: slideY }] }]}>
         <View style={fp.pill} />
         <View style={fp.hdr}>
           <Text style={fp.hdrTitle}>Написать другу</Text>
@@ -325,14 +365,14 @@ const FriendsPicker: React.FC<{
           />
         )}
         <View style={{ height: 34 }} />
-      </View>
+      </Animated.View>
     </Modal>
   );
 };
 
 const fp = StyleSheet.create({
-  backdrop:  { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)' },
-  sheet:     { backgroundColor: colors.background, borderTopLeftRadius: 28, borderTopRightRadius: 28, borderWidth: 1, borderColor: colors.primary + '20', maxHeight: '72%', paddingHorizontal: 20 },
+  backdrop:  { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)' },
+  sheet:     { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: colors.background, borderTopLeftRadius: 28, borderTopRightRadius: 28, borderWidth: 1, borderColor: colors.primary + '20', maxHeight: '72%', paddingHorizontal: 20 },
   pill:      { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.primary + '40', alignSelf: 'center', marginTop: 12, marginBottom: 4 },
   hdr:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 16 },
   hdrTitle:  { fontSize: 18, fontWeight: '700', color: colors.text },
@@ -357,12 +397,11 @@ const fp = StyleSheet.create({
 
 const ChatsScreen = () => {
   const navigation = useNavigation<NavProp>();
-  const [refreshing,     setRefreshing]     = useState(false);
-  const [pickerVisible,  setPickerVisible]  = useState(false);
-  const [menuChat,       setMenuChat]       = useState<Chat | null>(null);
+  const [refreshing,    setRefreshing]    = useState(false);
+  const [pickerVisible, setPickerVisible] = useState(false);
+  const [menuChat,      setMenuChat]      = useState<Chat | null>(null);
 
   const { data: me }    = useMe();
-  // ИСПРАВЛЕНИЕ: используем refetch напрямую из useChats
   const { data: chats, isLoading, refetch } = useChats();
   const { data: unreadPerChat } = useUnreadPerChat();
   const { data: totalUnread }   = useUnreadCount();
@@ -370,21 +409,12 @@ const ChatsScreen = () => {
   const { mutateAsync: createChat, isPending: isCreating } = useCreateChat();
   const isTypingInChat = useGlobalTyping();
 
-  // ИСПРАВЛЕНИЕ: убран useFocusEffect с refetch — он создавал race condition
-  // с useGlobalChatListener. Данные обновляются через socket events и
-  // refetchOnMount: 'always' в useChats.
-
   const getUnread = (chatId: number) =>
     unreadPerChat?.find((u) => u.chatId === chatId)?.unreadCount ?? 0;
 
-  // Pull-to-refresh: принудительный refetch с сервера
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
-    try {
-      await refetch();
-    } finally {
-      setRefreshing(false);
-    }
+    try { await refetch(); } finally { setRefreshing(false); }
   }, [refetch]);
 
   const openChat = (chatId: number, otherUser: OtherUser) =>
@@ -434,8 +464,6 @@ const ChatsScreen = () => {
       </View>
 
       {!chats?.length ? (
-        // ИСПРАВЛЕНИЕ: ScrollView с RefreshControl вместо View — даёт pull-to-refresh
-        // на пустом экране и не перекрывает кнопку в хедере
         <ScrollView
           style={{ flex: 1 }}
           contentContainerStyle={ss.emptyScroll}
@@ -469,8 +497,6 @@ const ChatsScreen = () => {
             />
           }
           renderItem={({ item }) => {
-            // Пропускаем чаты без корректных участников (могут появиться
-            // пока invalidate ещё не завершился)
             if (!item.participants?.length || !item.participants[0]?.user?.id) return null;
             return (
               <ChatItem
@@ -507,21 +533,20 @@ const ChatsScreen = () => {
 };
 
 const ss = StyleSheet.create({
-  container:    { flex: 1, backgroundColor: colors.background },
-  loading:      { flex: 1, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center' },
-  header:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: Platform.OS === 'ios' ? 60 : 40, paddingBottom: 16, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: colors.primary + '12' },
-  headerLeft:   { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerTitle:  { fontSize: 28, fontWeight: '700', color: colors.text, letterSpacing: -0.5 },
-  totalBadge:   { backgroundColor: colors.accent, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, minWidth: 22, alignItems: 'center' },
+  container:      { flex: 1, backgroundColor: colors.background },
+  loading:        { flex: 1, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center' },
+  header:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: Platform.OS === 'ios' ? 60 : 40, paddingBottom: 16, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: colors.primary + '12' },
+  headerLeft:     { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerTitle:    { fontSize: 28, fontWeight: '700', color: colors.text, letterSpacing: -0.5 },
+  totalBadge:     { backgroundColor: colors.accent, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, minWidth: 22, alignItems: 'center' },
   totalBadgeText: { fontSize: 12, fontWeight: '700', color: colors.text },
-  newBtn:       { width: 44, height: 44, borderRadius: 14, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', shadowColor: colors.accent, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 6 },
-  list:         { paddingVertical: 8, paddingHorizontal: 16 },
-  sep:          { height: 1, backgroundColor: colors.primary + '10', marginLeft: 82 },
-  empty:        { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 12 },
-  emptyScroll:  { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 12 },
-  emptyIcon:    { width: 80, height: 80, borderRadius: 28, backgroundColor: colors.secondary + '30', borderWidth: 1, borderColor: colors.primary + '20', alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
-  emptyTitle:   { fontSize: 18, fontWeight: '700', color: colors.text },
-  emptySub:     { fontSize: 14, color: colors.primary + '70', textAlign: 'center', lineHeight: 20 },
+  newBtn:         { width: 44, height: 44, borderRadius: 14, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', shadowColor: colors.accent, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 6 },
+  list:           { paddingVertical: 8, paddingHorizontal: 16 },
+  sep:            { height: 1, backgroundColor: colors.primary + '10', marginLeft: 82 },
+  emptyScroll:    { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 12 },
+  emptyIcon:      { width: 80, height: 80, borderRadius: 28, backgroundColor: colors.secondary + '30', borderWidth: 1, borderColor: colors.primary + '20', alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
+  emptyTitle:     { fontSize: 18, fontWeight: '700', color: colors.text },
+  emptySub:       { fontSize: 14, color: colors.primary + '70', textAlign: 'center', lineHeight: 20 },
 });
 
 export default ChatsScreen;

@@ -22,6 +22,8 @@ import {
   useRegister,
   useSendCode,
   useVerify,
+  useForgotPassword,
+  useConfirmForgotPassword,
 } from '../hooks/login.hook';
 import { AuthStackParamList } from '../navigation/types';
 import { colors } from '../styles/colors';
@@ -30,44 +32,49 @@ import { useAuth } from '../context/AuthContext';
 type Props = NativeStackScreenProps<AuthStackParamList, 'LoginScreen'>;
 
 type AuthMode = 'login' | 'register';
-type Screen = 'auth' | 'verify';
+type Screen = 'auth' | 'verify' | 'forgot';
+type ForgotStep = 'email' | 'confirm';
 
 const LoginScreen: React.FC<Props> = ({ navigation }) => {
-  // Auth state
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [screen, setScreen] = useState<Screen>('auth');
   const { signIn } = useAuth();
 
-  // Form fields
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [verifyCode, setVerifyCode] = useState('');
 
-  // UI state
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
 
-  // Timer for resend code
   const [timeLeft, setTimeLeft] = useState(0);
   const [canResend, setCanResend] = useState(false);
 
-  // Input ref for code verification
-  const codeInputRef = useRef<TextInput>(null);
+  // Реальная ширина switcher — измеряется через onLayout
+  const [switcherWidth, setSwitcherWidth] = useState(0);
 
-  // API hooks
+  const codeInputRef = useRef<TextInput>(null);
+  const forgotCodeInputRef = useRef<TextInput>(null);
+
+  const [forgotStep, setForgotStep] = useState<ForgotStep>('email');
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotCode, setForgotCode] = useState('');
+  const [forgotNewPassword, setForgotNewPassword] = useState('');
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+
   const registerMutation = useRegister();
   const loginMutation = useLogin();
   const verifyMutation = useVerify();
   const sendCodeMutation = useSendCode();
+  const forgotMutation = useForgotPassword();
+  const confirmForgotMutation = useConfirmForgotPassword();
 
-  // Animations
   const logoScale = useRef(new Animated.Value(0)).current;
   const logoRotate = useRef(new Animated.Value(0)).current;
   const formOpacity = useRef(new Animated.Value(0)).current;
   const formTranslateY = useRef(new Animated.Value(30)).current;
 
-  // Username field animation
   const usernameOpacity = useRef(
     new Animated.Value(authMode === 'register' ? 1 : 0),
   ).current;
@@ -75,16 +82,13 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
     new Animated.Value(authMode === 'register' ? 80 : 0),
   ).current;
 
-  // Tab indicator animation
   const tabIndicatorPosition = useRef(
     new Animated.Value(authMode === 'login' ? 0 : 1),
   ).current;
 
-  // Cursor blink animation
   const cursorOpacity = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    // Start cursor blinking animation
     const blinkAnimation = Animated.loop(
       Animated.sequence([
         Animated.timing(cursorOpacity, {
@@ -99,14 +103,11 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
         }),
       ]),
     );
-
     blinkAnimation.start();
-
     return () => blinkAnimation.stop();
   }, []);
 
   useEffect(() => {
-    // Logo animation
     Animated.parallel([
       Animated.spring(logoScale, {
         toValue: 1,
@@ -122,7 +123,6 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
       }),
     ]).start();
 
-    // Form animation
     Animated.parallel([
       Animated.timing(formOpacity, {
         toValue: 1,
@@ -142,7 +142,6 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
     checkPendingVerification();
   }, []);
 
-  // Animate username field when switching modes
   useEffect(() => {
     const toValue = authMode === 'register' ? 1 : 0;
     const heightValue = authMode === 'register' ? 80 : 0;
@@ -171,9 +170,7 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
 
   const checkPendingVerification = async () => {
     try {
-      const pendingEmail = await AsyncStorage.getItem(
-        'pending_verification_email',
-      );
+      const pendingEmail = await AsyncStorage.getItem('pending_verification_email');
       const expiresAt = await AsyncStorage.getItem('verification_expires_at');
 
       if (pendingEmail && expiresAt) {
@@ -210,17 +207,17 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
     }
   }, [timeLeft]);
 
-  const validateEmail = (email: string): boolean => {
+  const validateEmail = (value: string): boolean => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email) && email.length <= 320;
+    return emailRegex.test(value) && value.length <= 320;
   };
 
-  const validatePassword = (password: string): boolean => {
-    return password.length >= 8 && password.length <= 70;
+  const validatePassword = (value: string): boolean => {
+    return value.length >= 8 && value.length <= 70;
   };
 
-  const validateUsername = (username: string): boolean => {
-    return username.length > 0 && username.length <= 30;
+  const validateUsername = (value: string): boolean => {
+    return value.length > 0 && value.length <= 30;
   };
 
   const handleAuth = async () => {
@@ -230,11 +227,9 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
     if (!validateEmail(email)) {
       newErrors.email = 'Некорректный email (макс. 320 символов)';
     }
-
     if (!validatePassword(password)) {
       newErrors.password = 'Пароль: 8-70 символов';
     }
-
     if (authMode === 'register' && !validateUsername(username)) {
       newErrors.username = 'Имя: 1-30 символов';
     }
@@ -254,35 +249,24 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
 
         await AsyncStorage.setItem('pending_verification_email', email);
         const expiresAt = Date.now() + response.expiresIn * 1000;
-        await AsyncStorage.setItem(
-          'verification_expires_at',
-          expiresAt.toString(),
-        );
+        await AsyncStorage.setItem('verification_expires_at', expiresAt.toString());
 
         setTimeLeft(response.expiresIn);
         setCanResend(false);
         setScreen('verify');
       } else {
-        const response = await loginMutation.mutateAsync({
-          email,
-          password,
-        });
+        const response = await loginMutation.mutateAsync({ email, password });
 
         await AsyncStorage.setItem('pending_verification_email', email);
         const expiresAt = Date.now() + response.expiresIn * 1000;
-        await AsyncStorage.setItem(
-          'verification_expires_at',
-          expiresAt.toString(),
-        );
+        await AsyncStorage.setItem('verification_expires_at', expiresAt.toString());
 
         setTimeLeft(response.expiresIn);
         setCanResend(false);
         setScreen('verify');
       }
     } catch (error: any) {
-      setErrors({
-        api: error?.response?.data?.message || 'Ошибка при отправке',
-      });
+      setErrors({ api: error?.response?.data?.message || 'Ошибка при отправке' });
     }
   };
 
@@ -291,58 +275,31 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
       setErrors({ code: 'Введите 6-значный код' });
       return;
     }
-
     await handleVerifyWithCode(verifyCode);
   };
 
   const handleResendCode = async () => {
-    if (!canResend) {
-      console.log('Cannot resend - timer not expired');
-      return;
-    }
-
-    console.log('Resending code to:', email);
-    setErrors({}); // Clear previous errors
-
+    if (!canResend) return;
+    setErrors({});
     try {
       const response = await sendCodeMutation.mutateAsync({ email });
-      console.log('Code resent successfully, expires in:', response.expiresIn);
-
       const expiresAt = Date.now() + response.expiresIn * 1000;
-      await AsyncStorage.setItem(
-        'verification_expires_at',
-        expiresAt.toString(),
-      );
-
+      await AsyncStorage.setItem('verification_expires_at', expiresAt.toString());
       setTimeLeft(response.expiresIn);
       setCanResend(false);
     } catch (error: any) {
-      console.error('Error resending code:', error);
-      const errorMessage =
-        error?.response?.data?.message ||
-        error?.message ||
-        'Ошибка при отправке кода';
-      setErrors({ api: errorMessage });
+      setErrors({ api: error?.response?.data?.message || error?.message || 'Ошибка при отправке кода' });
     }
   };
 
   const handleCodeChange = (value: string) => {
-    // Only allow digits
-    const cleanValue = value.replace(/[^0-9]/g, '');
-
-    // Limit to 6 digits
-    const limitedValue = cleanValue.slice(0, 6);
-
-    setVerifyCode(limitedValue);
+    const cleanValue = value.replace(/[^0-9]/g, '').slice(0, 6);
+    setVerifyCode(cleanValue);
     setErrors({});
 
-    // Auto-submit when 6 digits are entered
-    if (limitedValue.length === 6) {
+    if (cleanValue.length === 6) {
       Keyboard.dismiss();
-      // Auto-verify after small delay
-      setTimeout(() => {
-        handleVerifyWithCode(limitedValue);
-      }, 200);
+      setTimeout(() => handleVerifyWithCode(cleanValue), 200);
     }
   };
 
@@ -351,14 +308,9 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
       setErrors({ code: 'Введите 6-значный код' });
       return;
     }
-
     try {
-      const response = await verifyMutation.mutateAsync({
-        email,
-        code,
-      });
+      const response = await verifyMutation.mutateAsync({ email, code });
 
-      // Save tokens
       await Keychain.setGenericPassword(
         'user',
         JSON.stringify({
@@ -367,7 +319,6 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
         }),
       );
 
-      // Clear pending verification
       await AsyncStorage.removeItem('pending_verification_email');
       await AsyncStorage.removeItem('verification_expires_at');
 
@@ -379,13 +330,64 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
     }
   };
 
+  const handleForgotSendCode = async () => {
+    setErrors({});
+    if (!validateEmail(forgotEmail)) {
+      setErrors({ forgotEmail: 'Некорректный email' });
+      return;
+    }
+    try {
+      await forgotMutation.mutateAsync({ email: forgotEmail });
+      setForgotStep('confirm');
+    } catch (error: any) {
+      setErrors({ api: error?.response?.data?.message || 'Ошибка при отправке' });
+    }
+  };
+
+  const handleForgotCodeChange = (value: string) => {
+    const clean = value.replace(/[^0-9]/g, '').slice(0, 6);
+    setForgotCode(clean);
+    setErrors({});
+  };
+
+  const handleForgotConfirm = async () => {
+    setErrors({});
+    const newErrors: { [key: string]: string } = {};
+
+    if (forgotCode.length !== 6) {
+      newErrors.forgotCode = 'Введите 6-значный код';
+    }
+    if (!validatePassword(forgotNewPassword)) {
+      newErrors.forgotPassword = 'Пароль: 8-70 символов';
+    }
+
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
+    }
+
+    try {
+      await confirmForgotMutation.mutateAsync({
+        email: forgotEmail,
+        code: forgotCode,
+        newPassword: forgotNewPassword,
+      });
+      setScreen('auth');
+      setForgotStep('email');
+      setForgotEmail('');
+      setForgotCode('');
+      setForgotNewPassword('');
+      setErrors({});
+    } catch (error: any) {
+      setErrors({ api: error?.response?.data?.message || 'Неверный код или ошибка' });
+    }
+  };
+
   const switchAuthMode = (mode: AuthMode) => {
     setAuthMode(mode);
     setErrors({});
     setPassword('');
-    if (mode === 'login') {
-      setUsername('');
-    }
+    if (mode === 'login') setUsername('');
   };
 
   const formatTime = (seconds: number): string => {
@@ -397,22 +399,41 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
   const isLoading =
     registerMutation.isPending ||
     loginMutation.isPending ||
-    verifyMutation.isPending;
+    verifyMutation.isPending ||
+    forgotMutation.isPending ||
+    confirmForgotMutation.isPending;
 
   const logoRotateInterpolate = logoRotate.interpolate({
     inputRange: [0, 1],
     outputRange: ['0deg', '360deg'],
   });
 
+  const getSubtext = () => {
+    if (screen === 'verify') return 'Проверьте вашу почту';
+    if (screen === 'forgot') return forgotStep === 'email' ? 'Восстановление пароля' : 'Введите код и новый пароль';
+    return 'Добро пожаловать';
+  };
+
+  // Половина switcher минус padding (4px слева + 4px справа = 8px)
+  // switcherWidth === 0 пока onLayout не сработал — используем fallback
+  const halfWidth = switcherWidth > 0 ? (switcherWidth - 8) / 2 : 0;
+
+  const indicatorTranslateX = tabIndicatorPosition.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, halfWidth],
+  });
+
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
       style={styles.container}
     >
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
       >
         {/* Logo */}
         <Animated.View
@@ -433,9 +454,7 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
 
         <Animated.View style={{ opacity: formOpacity }}>
           <Text style={styles.logoText}>DF Messenger</Text>
-          <Text style={styles.logoSubtext}>
-            {screen === 'auth' ? 'Добро пожаловать' : 'Проверьте вашу почту'}
-          </Text>
+          <Text style={styles.logoSubtext}>{getSubtext()}</Text>
         </Animated.View>
 
         {/* Auth Form */}
@@ -450,24 +469,22 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
             ]}
           >
             {/* Mode Switcher */}
-            <View style={styles.modeSwitcher}>
-              {/* Animated background indicator */}
-              <Animated.View
-                style={[
-                  styles.modeIndicator,
-                  {
-                    transform: [
-                      {
-                        translateX: tabIndicatorPosition.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [0, 180], // Adjust based on button width
-                        }),
-                      },
-                    ],
-                  },
-                ]}
-              />
-
+            <View
+              style={styles.modeSwitcher}
+              onLayout={e => setSwitcherWidth(e.nativeEvent.layout.width)}
+            >
+              {/* Индикатор рендерим только когда знаем реальную ширину */}
+              {switcherWidth > 0 && (
+                <Animated.View
+                  style={[
+                    styles.modeIndicator,
+                    {
+                      width: halfWidth,
+                      transform: [{ translateX: indicatorTranslateX }],
+                    },
+                  ]}
+                />
+              )}
               <TouchableOpacity
                 style={styles.modeButton}
                 onPress={() => switchAuthMode('login')}
@@ -482,7 +499,6 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
                   Вход
                 </Text>
               </TouchableOpacity>
-
               <TouchableOpacity
                 style={styles.modeButton}
                 onPress={() => switchAuthMode('register')}
@@ -501,24 +517,11 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
 
             {/* Email Input */}
             <View style={styles.inputWrapper}>
-              <View
-                style={[
-                  styles.inputContainer,
-                  errors.email && styles.inputError,
-                ]}
-              >
-                <Icon
-                  name="mail"
-                  size={20}
-                  color={colors.primary}
-                  style={styles.inputIcon}
-                />
+              <View style={[styles.inputContainer, errors.email && styles.inputError]}>
+                <Icon name="mail" size={20} color={colors.primary} style={styles.inputIcon} />
                 <TextInput
                   value={email}
-                  onChangeText={text => {
-                    setEmail(text);
-                    setErrors({ ...errors, email: '' });
-                  }}
+                  onChangeText={text => { setEmail(text); setErrors({ ...errors, email: '' }); }}
                   style={styles.input}
                   placeholder="Email"
                   placeholderTextColor={colors.primary + '80'}
@@ -527,40 +530,21 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
                   autoCorrect={false}
                 />
               </View>
-              {errors.email && (
-                <Text style={styles.errorText}>{errors.email}</Text>
-              )}
+              {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
             </View>
 
-            {/* Username Input (Register only) - Animated */}
+            {/* Username Input (Register only) */}
             <Animated.View
               style={[
                 styles.inputWrapper,
-                {
-                  opacity: usernameOpacity,
-                  height: usernameHeight,
-                  overflow: 'hidden',
-                },
+                { opacity: usernameOpacity, height: usernameHeight, overflow: 'hidden' },
               ]}
             >
-              <View
-                style={[
-                  styles.inputContainer,
-                  errors.username && styles.inputError,
-                ]}
-              >
-                <Icon
-                  name="user"
-                  size={20}
-                  color={colors.primary}
-                  style={styles.inputIcon}
-                />
+              <View style={[styles.inputContainer, errors.username && styles.inputError]}>
+                <Icon name="user" size={20} color={colors.primary} style={styles.inputIcon} />
                 <TextInput
                   value={username}
-                  onChangeText={text => {
-                    setUsername(text);
-                    setErrors({ ...errors, username: '' });
-                  }}
+                  onChangeText={text => { setUsername(text); setErrors({ ...errors, username: '' }); }}
                   style={styles.input}
                   placeholder="Имя пользователя"
                   placeholderTextColor={colors.primary + '80'}
@@ -569,31 +553,16 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
                   editable={authMode === 'register'}
                 />
               </View>
-              {errors.username && (
-                <Text style={styles.errorText}>{errors.username}</Text>
-              )}
+              {errors.username && <Text style={styles.errorText}>{errors.username}</Text>}
             </Animated.View>
 
             {/* Password Input */}
             <View style={styles.inputWrapper}>
-              <View
-                style={[
-                  styles.inputContainer,
-                  errors.password && styles.inputError,
-                ]}
-              >
-                <Icon
-                  name="lock"
-                  size={20}
-                  color={colors.primary}
-                  style={styles.inputIcon}
-                />
+              <View style={[styles.inputContainer, errors.password && styles.inputError]}>
+                <Icon name="lock" size={20} color={colors.primary} style={styles.inputIcon} />
                 <TextInput
                   value={password}
-                  onChangeText={text => {
-                    setPassword(text);
-                    setErrors({ ...errors, password: '' });
-                  }}
+                  onChangeText={text => { setPassword(text); setErrors({ ...errors, password: '' }); }}
                   style={[styles.input, styles.passwordInput]}
                   placeholder="Пароль"
                   placeholderTextColor={colors.primary + '80'}
@@ -601,34 +570,19 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
-                <TouchableOpacity
-                  onPress={() => setShowPassword(!showPassword)}
-                >
-                  <Icon
-                    name={showPassword ? 'eye-off' : 'eye'}
-                    size={20}
-                    color={colors.primary}
-                  />
+                <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
+                  <Icon name={showPassword ? 'eye-off' : 'eye'} size={20} color={colors.primary} />
                 </TouchableOpacity>
               </View>
-              {errors.password && (
-                <Text style={styles.errorText}>{errors.password}</Text>
-              )}
+              {errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
             </View>
 
-            {/* API Error */}
             {errors.api && (
-              <View>
-                <Text style={styles.apiErrorText}>{errors.api}</Text>
-              </View>
+              <Text style={styles.apiErrorText}>{errors.api}</Text>
             )}
 
-            {/* Submit Button */}
             <TouchableOpacity
-              style={[
-                styles.submitButton,
-                isLoading && styles.submitButtonDisabled,
-              ]}
+              style={[styles.submitButton, isLoading && styles.submitButtonDisabled]}
               onPress={handleAuth}
               disabled={isLoading}
               activeOpacity={0.8}
@@ -641,6 +595,22 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
                 </Text>
               )}
             </TouchableOpacity>
+
+            {authMode === 'login' && (
+              <TouchableOpacity
+                style={styles.forgotButton}
+                onPress={() => {
+                  setScreen('forgot');
+                  setForgotStep('email');
+                  setForgotEmail(email);
+                  setErrors({});
+                }}
+                activeOpacity={0.7}
+              >
+                <Icon name="help-circle" size={14} color={colors.primary + '70'} />
+                <Text style={styles.forgotButtonText}>Забыл пароль</Text>
+              </TouchableOpacity>
+            )}
           </Animated.View>
         )}
 
@@ -661,18 +631,14 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
               <Text style={styles.emailHighlight}>{email}</Text>
             </Text>
 
-            {/* Code Inputs */}
             <TouchableOpacity
               style={styles.codeContainer}
               onPress={() => codeInputRef.current?.focus()}
               activeOpacity={1}
             >
-              {/* Visual boxes */}
               {[0, 1, 2, 3, 4, 5].map(index => {
                 const isFilled = verifyCode[index];
-                const isActive =
-                  index === verifyCode.length && verifyCode.length < 6;
-
+                const isActive = index === verifyCode.length && verifyCode.length < 6;
                 return (
                   <View
                     key={index}
@@ -683,20 +649,13 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
                       errors.code && styles.codeBoxError,
                     ]}
                   >
-                    <Text style={styles.codeBoxText}>
-                      {verifyCode[index] || ''}
-                    </Text>
-                    {/* Blinking cursor for active box */}
+                    <Text style={styles.codeBoxText}>{verifyCode[index] || ''}</Text>
                     {isActive && !isFilled && (
-                      <Animated.View
-                        style={[styles.cursor, { opacity: cursorOpacity }]}
-                      />
+                      <Animated.View style={[styles.cursor, { opacity: cursorOpacity }]} />
                     )}
                   </View>
                 );
               })}
-
-              {/* Hidden input that does the actual work */}
               <TextInput
                 ref={codeInputRef}
                 value={verifyCode}
@@ -709,13 +668,8 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
               />
             </TouchableOpacity>
 
-            {errors.code && (
-              <View>
-                <Text style={styles.errorText}>{errors.code}</Text>
-              </View>
-            )}
+            {errors.code && <Text style={styles.errorText}>{errors.code}</Text>}
 
-            {/* Timer and Resend Button combined */}
             <View style={styles.timerSection}>
               <View style={styles.timerContainer}>
                 <Icon name="clock" size={16} color={colors.primary} />
@@ -723,8 +677,6 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
                   {timeLeft > 0 ? formatTime(timeLeft) : 'Время истекло'}
                 </Text>
               </View>
-
-              {/* Resend Button - only show when timer expired */}
               {canResend && (
                 <View style={styles.resendButtonContainer}>
                   <TouchableOpacity
@@ -737,14 +689,8 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
                       <ActivityIndicator size="small" color={colors.accent} />
                     ) : (
                       <>
-                        <Icon
-                          name="rotate-cw"
-                          size={16}
-                          color={colors.accent}
-                        />
-                        <Text style={styles.resendButtonText}>
-                          Отправить заново
-                        </Text>
+                        <Icon name="rotate-cw" size={16} color={colors.accent} />
+                        <Text style={styles.resendButtonText}>Отправить заново</Text>
                       </>
                     )}
                   </TouchableOpacity>
@@ -752,21 +698,18 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
               )}
             </View>
 
-            {/* API Error for resend */}
             {errors.api && (
               <View style={{ marginBottom: 16 }}>
                 <Text style={styles.errorText}>{errors.api}</Text>
               </View>
             )}
 
-            {/* Verify Button */}
             <View style={styles.verifyButtonContainer}>
               <TouchableOpacity
                 style={[
                   styles.submitButton,
                   styles.verifyButton,
-                  (isLoading || verifyCode.length !== 6) &&
-                    styles.submitButtonDisabled,
+                  (isLoading || verifyCode.length !== 6) && styles.submitButtonDisabled,
                 ]}
                 onPress={handleVerify}
                 disabled={isLoading || verifyCode.length !== 6}
@@ -780,14 +723,9 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
               </TouchableOpacity>
             </View>
 
-            {/* Back to auth */}
             <TouchableOpacity
               style={styles.backButton}
-              onPress={() => {
-                setScreen('auth');
-                setVerifyCode('');
-                setErrors({});
-              }}
+              onPress={() => { setScreen('auth'); setVerifyCode(''); setErrors({}); }}
               activeOpacity={0.7}
             >
               <Icon name="arrow-left" size={16} color={colors.primary} />
@@ -796,10 +734,181 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
           </Animated.View>
         )}
 
-        {/* Decorative elements */}
-        <View style={styles.decorativeCircle1} />
-        <View style={styles.decorativeCircle2} />
+        {/* Forgot Password Screen */}
+        {screen === 'forgot' && (
+          <Animated.View
+            style={[
+              styles.verifyContainer,
+              {
+                opacity: formOpacity,
+                transform: [{ translateY: formTranslateY }],
+              },
+            ]}
+          >
+            {forgotStep === 'email' ? (
+              <>
+                <View style={styles.forgotIconWrap}>
+                  <Icon name="unlock" size={32} color={colors.accent} />
+                </View>
+                <Text style={styles.verifyTitle}>Забыли пароль?</Text>
+                <Text style={styles.verifySubtitle}>
+                  Введите вашу почту — отправим код для сброса пароля
+                </Text>
+
+                <View style={[styles.inputWrapper, { width: '100%' }]}>
+                  <View style={[styles.inputContainer, errors.forgotEmail && styles.inputError]}>
+                    <Icon name="mail" size={20} color={colors.primary} style={styles.inputIcon} />
+                    <TextInput
+                      value={forgotEmail}
+                      onChangeText={text => { setForgotEmail(text); setErrors({ ...errors, forgotEmail: '' }); }}
+                      style={styles.input}
+                      placeholder="Email"
+                      placeholderTextColor={colors.primary + '80'}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                  </View>
+                  {errors.forgotEmail && <Text style={styles.errorText}>{errors.forgotEmail}</Text>}
+                </View>
+
+                {errors.api && <Text style={[styles.apiErrorText, { width: '100%' }]}>{errors.api}</Text>}
+
+                <TouchableOpacity
+                  style={[styles.submitButton, { width: '100%' }, isLoading && styles.submitButtonDisabled]}
+                  onPress={handleForgotSendCode}
+                  disabled={isLoading}
+                  activeOpacity={0.8}
+                >
+                  {isLoading ? (
+                    <ActivityIndicator color={colors.text} />
+                  ) : (
+                    <>
+                      <Icon name="send" size={16} color={colors.text} style={{ marginRight: 8 }} />
+                      <Text style={styles.submitButtonText}>Отправить код</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <View style={styles.forgotIconWrap}>
+                  <Icon name="key" size={32} color={colors.accent} />
+                </View>
+                <Text style={styles.verifyTitle}>Новый пароль</Text>
+                <Text style={styles.verifySubtitle}>
+                  Код отправлен на{'\n'}
+                  <Text style={styles.emailHighlight}>{forgotEmail}</Text>
+                </Text>
+
+                <TouchableOpacity
+                  style={styles.codeContainer}
+                  onPress={() => forgotCodeInputRef.current?.focus()}
+                  activeOpacity={1}
+                >
+                  {[0, 1, 2, 3, 4, 5].map(index => {
+                    const isFilled = forgotCode[index];
+                    const isActive = index === forgotCode.length && forgotCode.length < 6;
+                    return (
+                      <View
+                        key={index}
+                        style={[
+                          styles.codeBox,
+                          isFilled && styles.codeBoxFilled,
+                          isActive && styles.codeBoxActive,
+                          errors.forgotCode && styles.codeBoxError,
+                        ]}
+                      >
+                        <Text style={styles.codeBoxText}>{forgotCode[index] || ''}</Text>
+                        {isActive && !isFilled && (
+                          <Animated.View style={[styles.cursor, { opacity: cursorOpacity }]} />
+                        )}
+                      </View>
+                    );
+                  })}
+                  <TextInput
+                    ref={forgotCodeInputRef}
+                    value={forgotCode}
+                    onChangeText={handleForgotCodeChange}
+                    style={styles.hiddenCodeInput}
+                    keyboardType="number-pad"
+                    maxLength={6}
+                    autoFocus
+                    caretHidden
+                  />
+                </TouchableOpacity>
+                {errors.forgotCode && <Text style={styles.errorText}>{errors.forgotCode}</Text>}
+
+                <View style={[styles.inputWrapper, { width: '100%', marginTop: 16 }]}>
+                  <View style={[styles.inputContainer, errors.forgotPassword && styles.inputError]}>
+                    <Icon name="lock" size={20} color={colors.primary} style={styles.inputIcon} />
+                    <TextInput
+                      value={forgotNewPassword}
+                      onChangeText={text => { setForgotNewPassword(text); setErrors({ ...errors, forgotPassword: '' }); }}
+                      style={[styles.input, styles.passwordInput]}
+                      placeholder="Новый пароль"
+                      placeholderTextColor={colors.primary + '80'}
+                      secureTextEntry={!showForgotPassword}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                    <TouchableOpacity onPress={() => setShowForgotPassword(!showForgotPassword)}>
+                      <Icon name={showForgotPassword ? 'eye-off' : 'eye'} size={20} color={colors.primary} />
+                    </TouchableOpacity>
+                  </View>
+                  {errors.forgotPassword && <Text style={styles.errorText}>{errors.forgotPassword}</Text>}
+                </View>
+
+                {errors.api && <Text style={[styles.apiErrorText, { width: '100%' }]}>{errors.api}</Text>}
+
+                <View style={[styles.verifyButtonContainer, { width: '100%' }]}>
+                  <TouchableOpacity
+                    style={[
+                      styles.submitButton,
+                      styles.verifyButton,
+                      (isLoading || forgotCode.length !== 6 || forgotNewPassword.length < 8) && styles.submitButtonDisabled,
+                    ]}
+                    onPress={handleForgotConfirm}
+                    disabled={isLoading || forgotCode.length !== 6 || forgotNewPassword.length < 8}
+                    activeOpacity={0.8}
+                  >
+                    {isLoading ? (
+                      <ActivityIndicator color={colors.text} />
+                    ) : (
+                      <Text style={styles.submitButtonText}>Сменить пароль</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+
+            <TouchableOpacity
+              style={styles.backButton}
+              onPress={() => {
+                if (forgotStep === 'confirm') {
+                  setForgotStep('email');
+                  setForgotCode('');
+                  setErrors({});
+                } else {
+                  setScreen('auth');
+                  setForgotEmail('');
+                  setErrors({});
+                }
+              }}
+              activeOpacity={0.7}
+            >
+              <Icon name="arrow-left" size={16} color={colors.primary} />
+              <Text style={styles.backButtonText}>
+                {forgotStep === 'confirm' ? 'Изменить email' : 'Назад к входу'}
+              </Text>
+            </TouchableOpacity>
+          </Animated.View>
+        )}
       </ScrollView>
+
+      {/* Декоративные шары — вне скролла, не двигаются */}
+      <View style={styles.decorativeCircle1} pointerEvents="none" />
+      <View style={styles.decorativeCircle2} pointerEvents="none" />
     </KeyboardAvoidingView>
   );
 };
@@ -814,10 +923,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 24,
     paddingTop: 60,
-    paddingBottom: 40,
+    paddingBottom: Platform.OS === 'android' ? 80 : 40,
   },
 
-  // Logo
   logoContainer: {
     alignItems: 'center',
     marginBottom: 20,
@@ -849,14 +957,12 @@ const styles = StyleSheet.create({
     marginBottom: 32,
   },
 
-  // Form
   formContainer: {
     width: '100%',
     maxWidth: 400,
     alignSelf: 'center',
   },
 
-  // Mode Switcher
   modeSwitcher: {
     flexDirection: 'row',
     backgroundColor: colors.secondary + '40',
@@ -870,7 +976,6 @@ const styles = StyleSheet.create({
     left: 4,
     top: 4,
     bottom: 4,
-    width: '48%', // Approximately half minus padding
     backgroundColor: colors.accent,
     borderRadius: 12,
     zIndex: 0,
@@ -894,7 +999,6 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
 
-  // Inputs
   inputWrapper: {
     marginBottom: 20,
   },
@@ -925,7 +1029,6 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
 
-  // Errors
   errorText: {
     color: '#ff6b6b',
     fontSize: 13,
@@ -944,12 +1047,13 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
 
-  // Submit Button
   submitButton: {
+    flexDirection: 'row',
     backgroundColor: colors.accent,
     paddingVertical: 16,
     borderRadius: 14,
     alignItems: 'center',
+    justifyContent: 'center',
     marginTop: 8,
     shadowColor: colors.accent,
     shadowOffset: { width: 0, height: 8 },
@@ -967,7 +1071,32 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
-  // Verification
+  forgotButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 18,
+    paddingVertical: 6,
+  },
+  forgotButtonText: {
+    color: colors.primary + '80',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+
+  forgotIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 22,
+    backgroundColor: colors.accent + '18',
+    borderWidth: 1.5,
+    borderColor: colors.accent + '40',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+
   verifyContainer: {
     width: '100%',
     maxWidth: 400,
@@ -992,7 +1121,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // Code Inputs
   codeContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -1042,7 +1170,6 @@ const styles = StyleSheet.create({
     opacity: 0,
   },
 
-  // Timer
   timerSection: {
     width: '100%',
     marginBottom: 24,
@@ -1060,7 +1187,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // Resend Button
   resendButtonContainer: {
     width: '100%',
   },
@@ -1082,7 +1208,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // Verify Button
   verifyButtonContainer: {
     width: '100%',
     marginTop: 8,
@@ -1091,7 +1216,6 @@ const styles = StyleSheet.create({
     width: '100%',
   },
 
-  // Back Button
   backButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1105,7 +1229,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 
-  // Decorative
   decorativeCircle1: {
     position: 'absolute',
     top: -100,
