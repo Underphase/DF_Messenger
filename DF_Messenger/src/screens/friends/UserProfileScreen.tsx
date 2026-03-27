@@ -94,6 +94,7 @@ const UserProfileScreen = () => {
       const otherUser: OtherUser = {
         id: user.id, nickName: user.nickName,
         username: user.username, avatarUrl: user.avatarUrl,
+        bannerUrl: user.bannerUrl ?? null,
       };
       navigation.replace('ChatScreen', { chatId: chat.id, otherUser });
     } catch {

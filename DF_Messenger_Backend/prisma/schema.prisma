@@ -92,6 +92,9 @@ model Message {
   type            MessageType @default(TEXT)
   mediaUrl        String?     @db.VarChar(512)
   forwardedFromId Int?
+  musicTitle      String?     @db.VarChar(255)
+  musicArtist     String?     @db.VarChar(255)
+  musicCover      String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt()
 
@@ -199,4 +202,6 @@ enum MessageType {
   VIDEO
   FILE
   AUDIO
+  VOICE
+  MUSIC
 }

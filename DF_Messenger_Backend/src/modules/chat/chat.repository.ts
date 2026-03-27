@@ -48,7 +48,7 @@ export class ChatRepository {
         participants: {
           select: {
             user: {
-              select: { id: true, nickName: true, username: true, avatarUrl: true }
+              select: { id: true, nickName: true, username: true, avatarUrl: true, bannerUrl: true}
             }
           }
         },
@@ -115,7 +115,10 @@ export class ChatRepository {
     type: MessageType,
     content?: string,
     mediaUrl?: string,
-    forwardedFromId?: number
+    forwardedFromId?: number,
+    musicTitle?: string,
+    musicArtist?: string,
+    musicCover?: string
   ) {
     const participant = await this.prisma.chatParticipant.findUnique({
       where: { chatId_userId: { chatId, userId } }
@@ -128,7 +131,7 @@ export class ChatRepository {
     }
 
     const message = await this.prisma.message.create({
-      data: { chatId, senderId: userId, type, content, mediaUrl, forwardedFromId },
+      data: { chatId, senderId: userId, type, content, mediaUrl, forwardedFromId, musicTitle, musicArtist, musicCover },
       include: {
         sender: { select: { id: true, nickName: true, username: true, avatarUrl: true } },
         forwardedFrom: {
@@ -383,5 +386,12 @@ export class ChatRepository {
       select: { userId: true }
     })
     return participants.map(p => p.userId)
+  }
+
+  async getMessage(messageId: number) {
+    return this.prisma.message.findUnique({
+      where: { id: messageId },
+      select: { mediaUrl: true, musicCover: true, type: true }
+    })
   }
 }

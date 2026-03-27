@@ -1,11 +1,6 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, PutBucketPolicyCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { CreateBucketCommand, DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, PutBucketPolicyCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { Injectable, OnModuleInit } from '@nestjs/common'
-import ffmpeg from 'fluent-ffmpeg'
-import { Readable } from 'stream'
-import * as fs from 'fs'
-import * as path from 'path'
-import * as os from 'os'
 import sharp from 'sharp'
 
 const bucketText = 'avatars';
@@ -22,39 +17,44 @@ export class MinioService implements OnModuleInit {
 				accessKeyId: process.env.MINIO_ACCESS_KEY!,
 				secretAccessKey: process.env.MINIO_SECRET_ACCESS_KEY!
 			},
-			forcePathStyle: true
+			forcePathStyle: true,
+			requestChecksumCalculation: 'WHEN_REQUIRED',
+			responseChecksumValidation: 'WHEN_REQUIRED',
 		});
 	}
 
 	async onModuleInit() {
-    await this.ensurePublicBucket('avatars')
-    await this.ensurePublicBucket('banners')
+		await this.ensurePublicBucket('avatars')
+		await this.ensurePublicBucket('banners')
+		await this.ensurePublicBucket('chat-media', true)
 	}
 
-	  private async ensurePublicBucket(bucket: string) {
-    try {
-      await this.client.send(new HeadBucketCommand({ Bucket: bucket }))
-    } catch {
-      await this.client.send(new HeadBucketCommand({ Bucket: bucket }))
-    }
+	private async ensurePublicBucket(bucket: string, allowPut = false) {
+		try {
+			await this.client.send(new HeadBucketCommand({ Bucket: bucket }))
+		} catch {
+			await this.client.send(new CreateBucketCommand({ Bucket: bucket }))
+		}
 
-    const policy = {
-      Version: '2012-10-17',
-      Statement: [
-        {
-          Effect: 'Allow',
-          Principal: { AWS: ['*'] },
-          Action: ['s3:GetObject'],
-          Resource: [`arn:aws:s3:::${bucket}/*`]
-        }
-      ]
-    }
+		const actions = allowPut
+			? ['s3:GetObject', 's3:PutObject']
+			: ['s3:GetObject']
 
-    await this.client.send(new PutBucketPolicyCommand({
-      Bucket: bucket,
-      Policy: JSON.stringify(policy)
-    }))
-  }
+		const policy = {
+			Version: '2012-10-17',
+			Statement: [{
+				Effect: 'Allow',
+				Principal: { AWS: ['*'] },
+				Action: actions,
+				Resource: [`arn:aws:s3:::${bucket}/*`]
+			}]
+		}
+
+		await this.client.send(new PutBucketPolicyCommand({
+			Bucket: bucket,
+			Policy: JSON.stringify(policy)
+		}))
+	}
 
 	async cropImage(
   fileBuffer: Buffer,
@@ -78,13 +78,13 @@ export class MinioService implements OnModuleInit {
 		await this.client.send(command)
 	}
 
-	async getFile(key: string) {
+	async getFile(bucket: string, key: string) {
 		const command = new GetObjectCommand({
-			Bucket: bucketText,
+			Bucket: bucket,
 			Key: key
-		});
-		const response = await this.client.send(command);
-		return response.Body;
+		})
+		const response = await this.client.send(command)
+		return response.Body
 	}
 
 	async deleteFile(bucket: string, key: string) {
@@ -96,12 +96,13 @@ export class MinioService implements OnModuleInit {
 		await this.client.send(command);
 	}
 
-	async getUploadUrl(bucket: string, key: string, expiresIn = 900) {
+	async getUploadUrl(bucket: string, key: string, contentType: string, expiresIn = 900) {
 		const command = new PutObjectCommand({
 			Bucket: bucket,
-			Key: key
+			Key: key,
+			ContentType: contentType
 		})
-		return getSignedUrl(this.client, command, { expiresIn });
+		return getSignedUrl(this.client, command, { expiresIn })
 	}
 
 	async getDownloadUrl(bucket: string, key: string, expiresIn = 3600) {

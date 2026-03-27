@@ -43,6 +43,7 @@
     "ioredis": "^5.9.2",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.0.2",
+    "music-metadata": "^11.12.3",
     "nanoid": "^5.1.6",
     "nestjs-zod": "^5.1.1",
     "nodemailer": "^8.0.1",

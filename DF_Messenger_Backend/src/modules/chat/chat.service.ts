@@ -30,6 +30,10 @@ export class ChatService {
     return this.chatRepo.getPinnedMessages(chatId, userId)
   }
 
+  async getMessage(messageId: number) {
+    return this.chatRepo.getMessage(messageId)
+  }
+
   async getUnreadCount(userId: number) {
     return this.chatRepo.getUnreadCount(userId)
   }
@@ -39,7 +43,10 @@ export class ChatService {
   }
 
   async sendMessage(dto: SendMessageDto, userId: number) {
-    return this.chatRepo.sendMessage(dto.chatId, userId, dto.type, dto.content, dto.mediaUrl, dto.forwardedFromId)
+    return this.chatRepo.sendMessage(
+      dto.chatId, userId, dto.type, dto.content, dto.mediaUrl, dto.forwardedFromId,
+      dto.musicTitle, dto.musicArtist, dto.musicCover
+    )
   }
 
   async markMessagesAsRead(chatId: number, userId: number) {

@@ -18,6 +18,7 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Icon from 'react-native-vector-icons/Feather';
 import { colors } from '../../styles/colors';
+import { MiniPlayerBanner } from '../../context/GlobalPlayerContext';
 import {
   useChats,
   useDeleteChat,
@@ -46,7 +47,7 @@ const getOtherUser = (chat: Chat, myId: number): OtherUser | null => {
     nickName: u.nickName ?? '...',
     username: u.username ?? '...',
     avatarUrl: u.avatarUrl ?? null,
-    bannerUrl: (u as any).bannerUrl ?? null,
+    bannerUrl: u.bannerUrl ?? null,
   };
 };
 
@@ -180,7 +181,7 @@ const ChatItem: React.FC<{
   isTyping: boolean;
   onPress: () => void;
   onLongPress: () => void;
-}> = ({ chat, myId, unreadCount, isTyping, onPress, onLongPress }) => {
+}> = React.memo(({ chat, myId, unreadCount, isTyping, onPress, onLongPress }) => {
   const other        = getOtherUser(chat, myId);
   const { isOnline } = useUserOnlineStatus(other?.id ?? 0);
   const last         = chat.messages[0];
@@ -233,7 +234,7 @@ const ChatItem: React.FC<{
       </View>
     </TouchableOpacity>
   );
-};
+});
 
 const cs = StyleSheet.create({
   item:          { flexDirection: 'row', alignItems: 'center', paddingVertical: 13, paddingHorizontal: 4, gap: 13 },
@@ -409,31 +410,47 @@ const ChatsScreen = () => {
   const { mutateAsync: createChat, isPending: isCreating } = useCreateChat();
   const isTypingInChat = useGlobalTyping();
 
-  const getUnread = (chatId: number) =>
-    unreadPerChat?.find((u) => u.chatId === chatId)?.unreadCount ?? 0;
+  const getUnread = useCallback((chatId: number) =>
+    unreadPerChat?.find((u) => u.chatId === chatId)?.unreadCount ?? 0,
+  [unreadPerChat]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try { await refetch(); } finally { setRefreshing(false); }
   }, [refetch]);
 
-  const openChat = (chatId: number, otherUser: OtherUser) =>
-    navigation.navigate('ChatScreen', { chatId, otherUser });
+  const openChat = useCallback((chatId: number, otherUser: OtherUser) =>
+    navigation.navigate('ChatScreen', { chatId, otherUser }), [navigation]);
 
-  const handleChatPress = (chat: Chat) => {
+  const handleChatPress = useCallback((chat: Chat) => {
     if (!me) return;
     const other = getOtherUser(chat, me.id);
     if (!other) return;
     openChat(chat.id, other);
-  };
+  }, [me, openChat]);
 
-  const handleFriendSelect = async (friend: Friend, existingChatId?: number) => {
+  const handleFriendSelect = useCallback(async (friend: Friend, existingChatId?: number) => {
     const ou: OtherUser = { id: friend.id, nickName: friend.nickName, username: friend.username, avatarUrl: friend.avatarUrl };
     if (existingChatId) { openChat(existingChatId, ou); return; }
     try { const chat = await createChat(friend.id); openChat(chat.id, ou); } catch {}
-  };
+  }, [openChat, createChat]);
 
-  if (isLoading) {
+  const renderChatItem = useCallback(({ item }: { item: Chat }) => {
+    if (!item.participants?.length || !item.participants[0]?.user?.id) return null;
+    return (
+      <ChatItem
+        chat={item}
+        myId={me?.id ?? 0}
+        unreadCount={getUnread(item.id)}
+        isTyping={isTypingInChat(item.id)}
+        onPress={() => handleChatPress(item)}
+        onLongPress={() => setMenuChat(item)}
+      />
+    );
+  }, [me?.id, getUnread, isTypingInChat, handleChatPress]);
+
+  // Показываем спиннер только при первой загрузке (нет данных вообще)
+  if (isLoading && !chats) {
     return <View style={ss.loading}><ActivityIndicator size="large" color={colors.accent} /></View>;
   }
 
@@ -463,6 +480,9 @@ const ChatsScreen = () => {
         </TouchableOpacity>
       </View>
 
+      {/* Мини-панель глобального плеера — показывается если аудио/голосовое играет вне чата */}
+      <MiniPlayerBanner />
+
       {!chats?.length ? (
         <ScrollView
           style={{ flex: 1 }}
@@ -488,6 +508,9 @@ const ChatsScreen = () => {
           contentContainerStyle={ss.list}
           showsVerticalScrollIndicator={false}
           extraData={isTypingInChat}
+          removeClippedSubviews
+          maxToRenderPerBatch={10}
+          windowSize={5}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -496,19 +519,7 @@ const ChatsScreen = () => {
               colors={[colors.accent]}
             />
           }
-          renderItem={({ item }) => {
-            if (!item.participants?.length || !item.participants[0]?.user?.id) return null;
-            return (
-              <ChatItem
-                chat={item}
-                myId={me?.id ?? 0}
-                unreadCount={getUnread(item.id)}
-                isTyping={isTypingInChat(item.id)}
-                onPress={() => handleChatPress(item)}
-                onLongPress={() => setMenuChat(item)}
-              />
-            );
-          }}
+          renderItem={renderChatItem}
           ItemSeparatorComponent={() => <View style={ss.sep} />}
         />
       )}

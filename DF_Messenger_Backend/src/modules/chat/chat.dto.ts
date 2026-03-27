@@ -8,6 +8,9 @@ const sendMessageSchema = z.object({
   content:         z.string().optional(),
   mediaUrl:        z.string().optional(),
   forwardedFromId: z.number().int().positive().optional(),
+  musicTitle:      z.string().optional(),
+  musicArtist:     z.string().optional(),
+  musicCover:      z.string().optional()
 })
 
 export class SendMessageDto extends createZodDto(sendMessageSchema) {}

@@ -1,5 +1,5 @@
 // ─── Message type enum ────────────────────────────────────────────────────────
-export type MessageType = 'TEXT' | 'IMAGE' | 'VIDEO' | 'FILE' | 'AUDIO';
+export type MessageType = 'TEXT' | 'IMAGE' | 'VIDEO' | 'FILE' | 'AUDIO' | 'VOICE' | 'MUSIC';
 
 // ─── Chat list (GET /chat/list) ───────────────────────────────────────────────
 export interface ChatParticipantUser {
@@ -7,6 +7,7 @@ export interface ChatParticipantUser {
   nickName: string;
   username: string;
   avatarUrl: string | null;
+  bannerUrl: string | null;
 }
 
 export interface ChatParticipant {
@@ -104,6 +105,11 @@ export interface Message {
   sender: MessageSender;
   reactions: MessageReaction[];
   readReceipts: MessageReadReceipt[];
+  // Music fields
+  musicTitle: string | null;
+  musicArtist: string | null;
+  musicCover: string | null;
+  musicCoverUrl: string | null;
 }
 
 // ─── Unread counts ────────────────────────────────────────────────────────────

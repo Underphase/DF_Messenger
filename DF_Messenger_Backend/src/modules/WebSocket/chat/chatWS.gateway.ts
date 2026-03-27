@@ -12,6 +12,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { MinioService } from '../../../db/minio/minio.service'
 import { ChatService } from '../../chat/chat.service'
 import { MessageType } from '@prisma/client'
+import * as mm from 'music-metadata'
 
 interface JwtPayload { id: number }
 
@@ -54,13 +55,14 @@ export class ChatGateway implements OnGatewayConnection {
 
     const messagesWithUrls = await Promise.all(
       messages.map(async (msg) => {
-        if (msg.mediaUrl && msg.type !== MessageType.TEXT) {
-          return {
-            ...msg,
-            mediaUrl: await this.minioService.getDownloadUrl('chat-media', msg.mediaUrl)
-          }
-        }
-        return msg
+        if (msg.type === MessageType.TEXT) return msg
+
+        const [mediaUrl, musicCoverUrl] = await Promise.all([
+          msg.mediaUrl ? this.minioService.getDownloadUrl('chat-media', msg.mediaUrl) : null,
+          msg.musicCover ? this.minioService.getDownloadUrl('chat-media', msg.musicCover) : null,
+        ])
+
+        return { ...msg, mediaUrl: mediaUrl ?? msg.mediaUrl, musicCoverUrl }
       })
     )
 
@@ -113,9 +115,18 @@ export class ChatGateway implements OnGatewayConnection {
     const userId = socket.data.userId
     if (!userId) return { error: 'Не авторизован' }
 
+    const message = await this.chatService.getMessage(data.messageId)
+
     const result = await this.chatService.deleteMessage(data.messageId, userId, data.forEveryone)
 
     if (data.forEveryone) {
+      if (message?.mediaUrl) {
+        await this.minioService.deleteFile('chat-media', message.mediaUrl).catch(() => {})
+      }
+      if (message?.musicCover) {
+        await this.minioService.deleteFile('chat-media', message.musicCover).catch(() => {})
+      }
+
       this.server.to(`chat_${data.chatId}`).emit('message_deleted', {
         messageId: data.messageId,
         chatId: data.chatId,
@@ -217,14 +228,14 @@ export class ChatGateway implements OnGatewayConnection {
 
   @SubscribeMessage('request_upload_url')
   async handleRequestUploadUrl(
-    @MessageBody() data: { chatId: number; filename: string },
+    @MessageBody() data: { chatId: number; filename: string; contentType: string },
     @ConnectedSocket() socket: Socket
   ) {
     const userId = socket.data.userId
     if (!userId) return { error: 'Не авторизован' }
 
     const key = `chat/${data.chatId}/${uuidv4()}-${data.filename}`
-    const uploadUrl = await this.minioService.getUploadUrl('chat-media', key)
+    const uploadUrl = await this.minioService.getUploadUrl('chat-media', key, data.contentType)
     return { uploadUrl, key }
   }
 
@@ -239,14 +250,74 @@ export class ChatGateway implements OnGatewayConnection {
     const exists = await this.minioService.checkExists('chat-media', data.key)
     if (!exists) return { error: 'Файл не найден в хранилище' }
 
+    let musicTitle: string | undefined
+    let musicArtist: string | undefined
+    let musicCover: string | undefined
+
+    if (data.type === MessageType.MUSIC) {
+      try {
+        const fileStream = await this.minioService.getFile('chat-media', data.key)
+        
+        const chunks: Buffer[] = []
+        for await (const chunk of fileStream as any) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+        }
+        const fileBuffer = Buffer.concat(chunks)
+        console.log('[MUSIC] fileBuffer size:', fileBuffer.length)
+        const metadata = await mm.parseBuffer(fileBuffer)
+        console.log('[MUSIC] ID3 tags:', metadata.common)
+        
+        musicTitle = metadata.common.title ?? undefined
+        musicArtist = metadata.common.artist ?? undefined
+
+        if (metadata.common.picture?.[0]) {
+          const cover = metadata.common.picture[0]
+          const coverKey = `chat/covers/${uuidv4()}.jpg`
+          await this.minioService.uploadFile('chat-media', coverKey, Buffer.from(cover.data), cover.format)
+          musicCover = coverKey
+        }
+      } catch (e) {
+        console.error('Ошибка чтения ID3 тегов:', e)
+      }
+
+      console.log('[MUSIC] after ID3 - musicTitle:', musicTitle, 'key:', data.key)
+
+      if (!musicTitle) {
+        const filename = data.key.split('/').pop()?.replace(/\.[^/.]+$/, '') ?? ''
+        console.log('[MUSIC] fallback filename:', filename)
+        const cleanName = filename.replace(/^[a-f0-9-]{36}-/, '')
+        if (cleanName.includes(' - ')) {
+          const parts = cleanName.split(' - ')
+          if (!musicArtist) musicArtist = parts[0].trim()
+          musicTitle = parts[1].trim()
+        } else {
+          musicTitle = cleanName
+        }
+      }
+      console.log('[MUSIC] final - musicTitle:', musicTitle, 'musicArtist:', musicArtist)
+    }
+
     const message = await this.chatService.sendMessage(
-      { chatId: data.chatId, type: data.type, mediaUrl: data.key, forwardedFromId: data.forwardedFromId },
+      {
+        chatId: data.chatId,
+        type: data.type,
+        mediaUrl: data.key,
+        forwardedFromId: data.forwardedFromId,
+        musicTitle,
+        musicArtist,
+        musicCover
+      },
       userId
     )
 
     const mediaUrl = await this.minioService.getDownloadUrl('chat-media', data.key)
+    const musicCoverUrl = musicCover
+      ? await this.minioService.getDownloadUrl('chat-media', musicCover)
+      : undefined
 
-    this.server.to(`chat_${data.chatId}`).emit('new_message', { ...message, mediaUrl })
+    const messageWithUrls = { ...message, mediaUrl, ...(musicCoverUrl ? { musicCoverUrl } : {}) }
+
+    this.server.to(`chat_${data.chatId}`).emit('new_message', messageWithUrls)
 
     const participants = await this.chatService.getChatParticipants(data.chatId)
     for (const participantId of participants) {
@@ -255,7 +326,7 @@ export class ChatGateway implements OnGatewayConnection {
       }
     }
 
-    return { ...message, mediaUrl }
+    return messageWithUrls
   }
 
   @SubscribeMessage('react_message')
