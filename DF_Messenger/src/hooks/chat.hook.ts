@@ -17,7 +17,15 @@ import {
   UnreadPerChat,
 } from '../api/chat.types';
 import { useSocket } from '../context/SocketContext';
+import { useNetwork } from '../context/NetworkContext';
 import { useMe } from './user.hook';
+import {
+  saveChats,
+  loadChats,
+  saveMessages,
+  loadMessages,
+  enqueueMessage,
+} from '../storage/offlineStore';
 
 // ─── Query keys ───────────────────────────────────────────────────────────────
 
@@ -115,27 +123,54 @@ function _markReadIfNeeded(
   myId: number | undefined,
 ) {
   if (!socket || myId == null) return;
-  const hasFromOther = messages.some((m) => Number(m.senderId) !== Number(myId));
-  if (hasFromOther) socket.emit('mark_read', { chatId });
+  const hasUnreadFromOther = messages.some(
+    (m) =>
+      Number(m.senderId) !== Number(myId) &&
+      !m.readReceipts.some((r) => Number(r.userId) === Number(myId))
+  );
+  if (hasUnreadFromOther) socket.emit('mark_read', { chatId });
 }
 
 // ─── useChats ─────────────────────────────────────────────────────────────────
 
-export const useChats = () =>
-  useQuery({
+export const useChats = () => {
+  const queryClient = useQueryClient();
+  const { isOnline } = useNetwork();
+
+  // При старте: загружаем персистированный кеш с диска
+  // (делаем один раз — если в памяти ещё нет данных)
+  useEffect(() => {
+    const cached = queryClient.getQueryData<Chat[]>(chatQueryKeys.list);
+    if (cached?.length) return;
+
+    loadChats().then((chats) => {
+      if (chats?.length) {
+        queryClient.setQueryData<Chat[]>(chatQueryKeys.list, chats);
+      }
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return useQuery({
     queryKey: chatQueryKeys.list,
-    queryFn:  chatApi.getUserChats,
-    // Список чатов актуализируется через сокет-события (new_message, chat_deleted и т.д.)
-    // Рефетч при каждом возврате на экран не нужен — только мигание и лишние запросы
+    queryFn: async () => {
+      const data = await chatApi.getUserChats();
+      // Персистируем на диск после успешного fetch
+      saveChats(data);
+      return data;
+    },
     staleTime: Infinity,
     gcTime: 300_000,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
-    refetchOnReconnect: true, // при потере соединения — обновим
+    // При оффлайне — не запускаем запрос, данные с диска уже загружены выше
+    enabled: isOnline,
+    refetchOnReconnect: true,
     refetchInterval: false,
-    retry: 3,
-    retryDelay: 1000,
+    retry: isOnline ? 3 : 0,
+    retryDelay: 1_000,
+    placeholderData: (prev: Chat[] | undefined) => prev,
   });
+};
 
 // ─── useCreateChat ────────────────────────────────────────────────────────────
 
@@ -147,7 +182,9 @@ export const useCreateChat = () => {
       queryClient.setQueryData<Chat[]>(chatQueryKeys.list, (old) => {
         if (!old) return [newChat as unknown as Chat];
         if (old.some((c) => c.id === (newChat as any).id)) return old;
-        return [newChat as unknown as Chat, ...old];
+        const updated = [newChat as unknown as Chat, ...old];
+        saveChats(updated); // персистируем обновлённый список
+        return updated;
       });
     },
   });
@@ -160,9 +197,11 @@ export const useDeleteChat = () => {
   const queryClient = useQueryClient();
 
   const mutate = useCallback(({ chatId, forEveryone }: { chatId: number; forEveryone: boolean }) => {
-    queryClient.setQueryData<Chat[]>(chatQueryKeys.list, (old) =>
-      old ? old.filter((c) => c.id !== chatId) : old,
-    );
+    queryClient.setQueryData<Chat[]>(chatQueryKeys.list, (old) => {
+      const updated = old ? old.filter((c) => c.id !== chatId) : [];
+      if (updated) saveChats(updated); // персистируем
+      return updated.length ? updated : old;
+    });
     _clearUnread(queryClient, chatId);
 
     if (socket?.connected) {
@@ -178,25 +217,33 @@ export const useDeleteChat = () => {
 
 // ─── useUnreadCount ───────────────────────────────────────────────────────────
 
-export const useUnreadCount = () =>
-  useQuery({
+export const useUnreadCount = () => {
+  const { isOnline } = useNetwork();
+  return useQuery({
     queryKey: chatQueryKeys.unreadCount,
     queryFn:  chatApi.getUnreadCount,
     staleTime: 30_000,
-    refetchInterval: 30_000,
+    refetchInterval: isOnline ? 30_000 : false,
     refetchIntervalInBackground: false,
+    enabled: isOnline,
+    placeholderData: (prev: { count: number } | undefined) => prev,
   });
+};
 
 // ─── useUnreadPerChat ─────────────────────────────────────────────────────────
 
-export const useUnreadPerChat = () =>
-  useQuery({
+export const useUnreadPerChat = () => {
+  const { isOnline } = useNetwork();
+  return useQuery({
     queryKey: chatQueryKeys.unreadPerChat,
     queryFn:  chatApi.getUnreadPerChat,
     staleTime: 30_000,
-    refetchInterval: 30_000,
+    refetchInterval: isOnline ? 30_000 : false,
     refetchIntervalInBackground: false,
+    enabled: isOnline,
+    placeholderData: (prev: UnreadPerChat[] | undefined) => prev,
   });
+};
 
 // ─── useSearchMessages ────────────────────────────────────────────────────────
 
@@ -228,9 +275,6 @@ export const useForwardToChat = () => {
 
 // ─── useChatRoom ──────────────────────────────────────────────────────────────
 
-// ─── Content-Type fallback ────────────────────────────────────────────────────
-// На случай если библиотека не заполнила file.type (бывает с некоторыми пикерами)
-
 function _fallbackContentType(mediaType: 'IMAGE' | 'VIDEO' | 'FILE' | 'AUDIO' | 'VOICE' | 'MUSIC'): string {
   switch (mediaType) {
     case 'IMAGE': return 'image/jpeg';
@@ -242,23 +286,19 @@ function _fallbackContentType(mediaType: 'IMAGE' | 'VIDEO' | 'FILE' | 'AUDIO' | 
   }
 }
 
-// ─── Кеш сообщений по chatId — переживает размонтирование компонента ──────────
-// Аналог Telegram: при возврате в чат — сообщения мгновенно из памяти,
-// пока join_chat в фоне проверяет новые.
 const _messagesCache   = new Map<number, Message[]>();
 const _pinnedCache     = new Map<number, PinnedMessage[]>();
-// Запоминаем когда и на каком сокете последний раз делали join_chat
 const _joinedAt        = new Map<number, { socketId: string; ts: number }>();
-const CACHE_FRESH_MS   = 30_000; // 30 сек — кеш считается свежим, join_chat не повторяем
+const CACHE_FRESH_MS   = 30_000;
 
 export const useChatRoom = (chatId: number, options?: { onMessageDeleted?: (messageId: number) => void }) => {
   const { socket, isConnected } = useSocket();
+  const { isOnline } = useNetwork();
   const queryClient = useQueryClient();
   const { data: me } = useMe();
 
   const [messages,       setMessages]       = useState<Message[]>(() => _messagesCache.get(chatId) ?? []);
   const [pinnedMessages, setPinnedMessages] = useState<PinnedMessage[]>(() => _pinnedCache.get(chatId) ?? []);
-  // isLoading = true только если кеша нет совсем (первый вход)
   const [isLoading,      setIsLoading]      = useState(() => !_messagesCache.has(chatId));
 
   const socketRef      = useRef(socket);
@@ -269,8 +309,26 @@ export const useChatRoom = (chatId: number, options?: { onMessageDeleted?: (mess
   useEffect(() => { meRef.current = me; },                   [me]);
   useEffect(() => { queryClientRef.current = queryClient; }, [queryClient]);
 
-  // JOIN — загружаем сообщения. Если есть свежий кеш на том же сокете — пропускаем.
+  // ── JOIN — загружаем сообщения ──────────────────────────────────────────────
   useEffect(() => {
+    // ОФФЛАЙН-ФОЛЛБЭК: грузим с диска если в памяти пусто
+    if (!_messagesCache.has(chatId)) {
+      loadMessages(chatId).then((persisted) => {
+        if (persisted?.length) {
+          // Фильтруем сломанные медиа — S3 presigned URLs протухают,
+          // показываем только то что гарантированно откроется оффлайн
+          const safe = persisted.filter(
+            (m) => m.type === 'TEXT' || (m.mediaUrl != null && m.mediaUrl !== '')
+          );
+          if (safe.length) {
+            _messagesCache.set(chatId, safe);
+            setMessages(safe);
+            setIsLoading(false);
+          }
+        }
+      });
+    }
+
     if (!socket || !isConnected || !chatId) return;
 
     const joined = _joinedAt.get(chatId);
@@ -278,13 +336,11 @@ export const useChatRoom = (chatId: number, options?: { onMessageDeleted?: (mess
       joined.socketId === socket.id &&
       Date.now() - joined.ts < CACHE_FRESH_MS;
 
-    // Есть кеш и он свежий — не делаем лишний запрос, список уже показан
     if (isFresh && _messagesCache.has(chatId)) {
       setIsLoading(false);
       return;
     }
 
-    // Спиннер только если кеша нет вообще
     if (!_messagesCache.has(chatId)) setIsLoading(true);
 
     socket.emit('join_chat', { chatId }, (res: { success: boolean; messages: any[]; pinnedMessages?: PinnedMessage[] }) => {
@@ -297,12 +353,13 @@ export const useChatRoom = (chatId: number, options?: { onMessageDeleted?: (mess
           const merged = [...normalized, ...localOnly].sort(
             (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
           );
-          // Если данные идентичны — не триггерим ре-рендер
           if (prev.length === merged.length && prev.every((m, i) => m.id === merged[i].id)) {
             _messagesCache.set(chatId, prev);
             return prev;
           }
           _messagesCache.set(chatId, merged);
+          // ── Персистируем на диск ────────────────────────────────────────────
+          saveMessages(chatId, merged);
           return merged;
         });
         if (res.pinnedMessages) {
@@ -315,9 +372,7 @@ export const useChatRoom = (chatId: number, options?: { onMessageDeleted?: (mess
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, socket?.id]);
 
-
-
-  // LISTENERS
+  // ── LISTENERS ───────────────────────────────────────────────────────────────
   useEffect(() => {
     const s = socketRef.current;
     if (!s) return;
@@ -330,15 +385,15 @@ export const useChatRoom = (chatId: number, options?: { onMessageDeleted?: (mess
       let isDuplicate = false;
       setMessages((prev) => {
         if (prev.some((m) => m.id === msg.id)) { isDuplicate = true; return prev; }
-        // Удаляем optimistic-сообщения (id < 0) от того же отправителя с тем же контентом
         const withoutOptimistic = prev.filter((m) => {
           if (m.id >= 0) return true;
           if (Number(m.senderId) !== Number(senderId)) return true;
           if (m.content !== (msg.content ?? null)) return true;
-          return false; // убираем совпадающий pending
+          return false;
         });
         const next = [...withoutOptimistic, msg];
         _messagesCache.set(chatId, next);
+        saveMessages(chatId, next); // персистируем новое сообщение
         return next;
       });
 
@@ -346,21 +401,21 @@ export const useChatRoom = (chatId: number, options?: { onMessageDeleted?: (mess
       _incrementUnread(queryClientRef.current, raw.chatId, senderId, meRef.current?.id);
       queryClientRef.current.setQueryData<Chat[]>(chatQueryKeys.list, (old) => {
         if (!old) return old;
-        return [...old.map((chat) =>
+        const updated = [...old.map((chat) =>
           chat.id !== raw.chatId ? chat : {
             ...chat,
             updatedAt: raw.createdAt,
             messages: [{ id: raw.id, content: raw.content ?? null, type: raw.type, createdAt: raw.createdAt, sender: raw.sender }],
           },
         )].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        saveChats(updated);
+        return updated;
       });
     };
 
     const onDeleted = (data: MessageDeletedEvent) => {
       if (data.chatId !== chatId) return;
-      // Уведомляем внешний обработчик (например, для остановки плеера)
       options?.onMessageDeleted?.(data.messageId);
-      // Убираем из закреплённых если удалённое сообщение было закреплено
       setPinnedMessages((prev) => {
         const filtered = prev.filter((p) => p.messageId !== data.messageId);
         if (filtered.length !== prev.length) {
@@ -372,6 +427,7 @@ export const useChatRoom = (chatId: number, options?: { onMessageDeleted?: (mess
       setMessages((prev) => {
         const next = prev.filter((m) => m.id !== data.messageId);
         _messagesCache.set(chatId, next);
+        saveMessages(chatId, next); // персистируем удаление
         return next;
       });
       queryClientRef.current.setQueryData<Chat[]>(chatQueryKeys.list, (old) => {
@@ -392,6 +448,7 @@ export const useChatRoom = (chatId: number, options?: { onMessageDeleted?: (mess
           readReceipts: Array.isArray(raw.readReceipts) ? raw.readReceipts : m.readReceipts,
         }));
         _messagesCache.set(chatId, next);
+        saveMessages(chatId, next); // персистируем редактирование
         return next;
       });
       queryClientRef.current.setQueryData<Chat[]>(chatQueryKeys.list, (old) => {
@@ -428,18 +485,20 @@ export const useChatRoom = (chatId: number, options?: { onMessageDeleted?: (mess
           return { ...m, reactions: reactions.filter((r) => !(r.userId === data.userId && r.emoji === data.emoji)) };
         });
         _messagesCache.set(chatId, next);
+        saveMessages(chatId, next);
         return next;
       });
     };
 
     const onMessagesRead = (data: MessagesReadEvent) => {
       if (data.chatId !== chatId) return;
-      _clearUnread(queryClientRef.current, data.chatId);
-      // Обновляем readReceipts у всех сообщений в чате — помечаем как прочитанные
+      if (Number(data.userId) !== Number(meRef.current?.id)) {
+        _clearUnread(queryClientRef.current, data.chatId);
+      }
       setMessages((prev) => {
         let changed = false;
         const next = prev.map((m) => {
-          if (m.senderId === data.userId) return m; // читатель сам не отмечает свои
+          if (m.senderId === data.userId) return m;
           if (m.readReceipts.some((r) => r.userId === data.userId)) return m;
           changed = true;
           return {
@@ -476,13 +535,14 @@ export const useChatRoom = (chatId: number, options?: { onMessageDeleted?: (mess
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, socket?.id]);
 
+  // ── sendMessage — поддержка оффлайн-очереди ─────────────────────────────────
   const sendMessage = useCallback((content: string, replyToId?: number) => {
-    if (!socket) return;
     if (!content.trim() && replyToId == null) return;
 
-    // Optimistic update — временное сообщение с отрицательным id
     const tempId = -(Date.now());
     const me = meRef.current;
+
+    // Optimistic update — всегда, и онлайн и оффлайн
     if (me) {
       const tempMsg: Message = {
         id: tempId,
@@ -503,12 +563,25 @@ export const useChatRoom = (chatId: number, options?: { onMessageDeleted?: (mess
       setMessages((prev) => {
         const next = [...prev, tempMsg];
         _messagesCache.set(chatId, next);
+        saveMessages(chatId, next);
         return next;
       });
     }
 
+    if (!isOnline || !socket) {
+      // ── Оффлайн: кладём в очередь ───────────────────────────────────────────
+      enqueueMessage({
+        id: String(Math.abs(tempId)),
+        chatId,
+        content: content.trim(),
+        ...(replyToId != null ? { replyToId } : {}),
+        createdAt: new Date().toISOString(),
+      });
+      return;
+    }
+
     socket.emit('send_message', { chatId, content: content.trim(), ...(replyToId != null ? { forwardedFromId: replyToId } : {}) });
-  }, [socket, chatId]);
+  }, [socket, chatId, isOnline]);
 
   const sendMedia = useCallback(async (
     file: { uri: string; name: string; type: string; size?: number },
@@ -517,9 +590,6 @@ export const useChatRoom = (chatId: number, options?: { onMessageDeleted?: (mess
   ) => {
     if (!socket) return;
 
-    // Передаём contentType при запросе presigned URL —
-    // S3 требует чтобы Content-Type при PUT совпадал с тем,
-    // что было указано при генерации URL на бэке.
     const contentType = file.type || _fallbackContentType(mediaType);
 
     const uploadData = await new Promise<{ uploadUrl: string; key: string }>((resolve, reject) => {
@@ -532,9 +602,6 @@ export const useChatRoom = (chatId: number, options?: { onMessageDeleted?: (mess
         },
       );
     });
-
-    console.log('[UPLOAD] uploadUrl:', uploadData.uploadUrl);
-    console.log('[UPLOAD] contentType:', contentType);
 
     await new Promise<void>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -652,7 +719,6 @@ export const useGlobalChatListener = () => {
     }
   }, []);
 
-  // При подключении/переподключении — рефетч + джоин всех комнат
   useEffect(() => {
     if (!socket || !isConnected) return;
     joinedRooms.current.clear();
@@ -665,7 +731,6 @@ export const useGlobalChatListener = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket?.id]);
 
-  // Когда кеш чатов обновился — джоиним новые комнаты
   useEffect(() => {
     const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
       if (
@@ -680,7 +745,6 @@ export const useGlobalChatListener = () => {
     return unsubscribe;
   }, [queryClient, joinAllRooms]);
 
-  // Основные socket-события
   useEffect(() => {
     const s = socketRef.current;
     if (!s) return;
@@ -691,7 +755,6 @@ export const useGlobalChatListener = () => {
       const chatExists = chats?.some((c) => c.id === raw.chatId);
 
       if (!chatExists) {
-        // Незнакомый чат — джоиним, рефетчим список И инкрементим unread
         _incrementUnread(qc, raw.chatId, raw.sender?.id ?? raw.senderId, meRef.current?.id);
         if (!joinedRooms.current.has(raw.chatId)) {
           s.emit('join_chat', { chatId: raw.chatId }, (res: any) => {
@@ -704,28 +767,33 @@ export const useGlobalChatListener = () => {
         return;
       }
 
-      // Чат есть — обновляем превью через setQueryData (без флэша)
       qc.setQueryData<Chat[]>(chatQueryKeys.list, (old) => {
         if (!old) return old;
-        return [...old.map((chat) =>
+        const updated = [...old.map((chat) =>
           chat.id !== raw.chatId ? chat : {
             ...chat,
             updatedAt: raw.createdAt,
             messages: [{ id: raw.id, content: raw.content ?? null, type: raw.type, createdAt: raw.createdAt, sender: raw.sender }],
           },
         )].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        saveChats(updated);
+        return updated;
       });
       _incrementUnread(qc, raw.chatId, raw.sender?.id ?? raw.senderId, meRef.current?.id);
     };
 
     const onMessagesRead = (data: MessagesReadEvent) => {
+      // Если читали МЫ сами — не сбрасываем чужие непрочитанные
+      if (Number(data.userId) === Number(meRef.current?.id)) return;
       _clearUnread(queryClientRef.current, data.chatId);
     };
 
     const onChatDeleted = (data: ChatDeletedEvent) => {
-      queryClientRef.current.setQueryData<Chat[]>(chatQueryKeys.list, (old) =>
-        old ? old.filter((c) => c.id !== data.chatId) : old,
-      );
+      queryClientRef.current.setQueryData<Chat[]>(chatQueryKeys.list, (old) => {
+        const updated = old ? old.filter((c) => c.id !== data.chatId) : [];
+        if (updated) saveChats(updated);
+        return updated;
+      });
       joinedRooms.current.delete(data.chatId);
       _clearUnread(queryClientRef.current, data.chatId);
     };
@@ -770,7 +838,6 @@ export const useGlobalChatListener = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket?.id]);
 
-  // new_chat — бэк шлёт { chatId } при новом сообщении в незнакомый чат.
   useEffect(() => {
     const s = socketRef.current;
     if (!s) return;
@@ -798,17 +865,14 @@ export const useGlobalChatListener = () => {
     return () => { s.off('new_chat', onNewChat); };
   }, [socket?.id]);
 
-  // При потере соединения
   useEffect(() => {
     if (!isConnected) joinedRooms.current.clear();
   }, [isConnected]);
 
-  // При выходе на foreground — рефетч только если сокет был отключён (могли пропустить события)
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state: AppStateStatus) => {
       if (state === 'active') {
         const s = socketRef.current;
-        // Если сокет живой — данные актуальны через события, рефетч не нужен
         if (!s?.connected) {
           queryClientRef.current.refetchQueries({ queryKey: chatQueryKeys.list });
         }
@@ -818,7 +882,6 @@ export const useGlobalChatListener = () => {
     return () => sub.remove();
   }, [joinAllRooms]);
 
-  // Начальный джоин
   useEffect(() => {
     joinAllRooms();
     // eslint-disable-next-line react-hooks/exhaustive-deps

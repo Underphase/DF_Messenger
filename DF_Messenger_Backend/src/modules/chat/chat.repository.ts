@@ -283,7 +283,7 @@ export class ChatRepository {
       orderBy: { createdAt: 'asc' },
       take: 50,
       include: {
-        sender: { select: { id: true, username: true, nickName: true, avatarUrl: true } },
+        sender: { select: { id: true, username: true, nickName: true, avatarUrl: true, bannerUrl: true } },
         reactions: true,
         readReceipts: true,
         forwardedFrom: {

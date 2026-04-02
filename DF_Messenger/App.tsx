@@ -2,8 +2,10 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from './src/context/AuthContext';
 import RootNavigator from './src/navigation/RootNavigator';
-import { SocketProvider } from './src/context/SocketContext'
-import { GlobalPlayerProvider } from './src/context/GlobalPlayerContext'
+import { SocketProvider } from './src/context/SocketContext';
+import { GlobalPlayerProvider } from './src/context/GlobalPlayerContext';
+import { NetworkProvider } from './src/context/NetworkContext';
+import { useOfflineQueue } from './src/hooks/offlineQueue.hook';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -12,15 +14,24 @@ const queryClient = new QueryClient({
   },
 });
 
+// Отдельный компонент — нужен чтобы хук useOfflineQueue мог обращаться
+// к SocketContext и NetworkContext, которые оборачивают его снаружи
+const AppInner: React.FC = () => {
+  useOfflineQueue(); // запускает синхронизацию очереди при восстановлении сети
+  return <RootNavigator />;
+};
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <AuthProvider>
-      <SocketProvider>
-        <GlobalPlayerProvider>
-          <RootNavigator />
-        </GlobalPlayerProvider>
-      </SocketProvider>
-    </AuthProvider>
+    <NetworkProvider>
+      <AuthProvider>
+        <SocketProvider>
+          <GlobalPlayerProvider>
+            <AppInner />
+          </GlobalPlayerProvider>
+        </SocketProvider>
+      </AuthProvider>
+    </NetworkProvider>
   </QueryClientProvider>
 );
 

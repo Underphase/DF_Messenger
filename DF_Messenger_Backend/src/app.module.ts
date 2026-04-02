@@ -45,7 +45,7 @@ import { ChatWSModule } from './modules/WebSocket/chat/chatWS.module'
 		AuthModule,
 		PresenceModule,
 		ChatModule,
-		ChatWSModule
+		ChatWSModule,
 	],
 
 	providers: [

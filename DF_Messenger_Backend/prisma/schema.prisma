@@ -31,6 +31,8 @@ model User {
   readReceipts     MessageRead[]
   deletedMessages  MessageDeletedFor[]
   pinnedMessages   ChatPinnedMessage[]
+  anonQueue        AnonQueue?
+  anonParticipants AnonParticipant[]
 }
 
 model Friendship {
@@ -161,6 +163,38 @@ model ChatPinnedMessage {
   @@index([userId])
 }
 
+model AnonQueue {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AnonChat {
+  id           Int              @id @default(autoincrement())
+  createdAt    DateTime         @default(now())
+  messages     AnonMessage[]
+  participants AnonParticipant[]
+}
+
+model AnonParticipant {
+  id       Int      @id @default(autoincrement())
+  chatId   Int
+  userId   Int
+  anonName String
+  chat     AnonChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AnonMessage {
+  id        Int      @id @default(autoincrement())
+  chatId    Int
+  anonName  String
+  content   String
+  createdAt DateTime @default(now())
+  chat      AnonChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+}
+
 model RefreshToken {
   id                Int       @id @default(autoincrement())
   userId            Int
@@ -200,6 +234,7 @@ enum MessageType {
   TEXT
   IMAGE
   VIDEO
+  VIDEO_NOTE
   FILE
   AUDIO
   VOICE

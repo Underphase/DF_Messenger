@@ -62,6 +62,143 @@ import { useMe } from "../../hooks/user.hook";
 import { AppStackParamList } from "../../navigation/types";
 import { colors } from "../../styles/colors";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { OfflineBanner } from '../../components/OfflineBanner';
+import { useNetwork } from '../../context/NetworkContext';
+
+// ─── Lazy-load react-native-fs для локального медиа-кэша ─────────────────────
+let RNFS: any = null;
+try { RNFS = require("react-native-fs"); } catch (_) {}
+
+// ─── Локальный медиа-кэш (переживает навигацию, сбрасывается при перезапуске) ─
+// url → локальный путь на диске
+const _mediaDiskCache = new Map<string, string>();
+
+// Определяем расширение файла по типу медиа — без расширения react-native-video
+// не может определить кодек и просто не воспроизводит файл
+function _extForType(mediaType?: string): string {
+  switch (mediaType) {
+    case "MUSIC": return ".mp3";
+    case "VOICE":
+    case "AUDIO": return ".wav";
+    case "VIDEO": return ".mp4";
+    case "IMAGE": return ".jpg";
+    default:      return "";
+  }
+}
+
+// Безопасное имя файла — убираем спецсимволы и query string
+function _safeFilename(remoteUrl: string, mediaType?: string): string {
+  const raw = remoteUrl.split("?")[0].split("/").pop() ?? `media_${Date.now()}`;
+  // decode % и заменяем всё кроме букв/цифр/дефиса/точки на _
+  let name = "";
+  try { name = decodeURIComponent(raw); } catch { name = raw; }
+  name = name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+  // Если нет расширения — добавляем по типу медиа
+  if (!name.includes(".")) name += _extForType(mediaType);
+  return name;
+}
+
+/**
+ * useMediaUrl — возвращает URL для воспроизведения.
+ * Онлайн: скачивает файл в фоне при первом обращении → следующий раз из кэша.
+ * Оффлайн: отдаёт кэшированный локальный путь если есть, иначе null.
+ *
+ * mediaType нужен чтобы добавить правильное расширение файлу без него.
+ */
+function useMediaUrl(remoteUrl: string, mediaType?: string): { url: string | null; cached: boolean } {
+  const { isOnline } = useNetwork();
+  const [localUrl, setLocalUrl] = useState<string | null>(
+    () => _mediaDiskCache.get(remoteUrl) ?? null
+  );
+  const downloading = useRef(false);
+
+  useEffect(() => {
+    if (!remoteUrl) return;
+
+    // Инвалидируем старый кэш если файл был сохранён без расширения
+    const cached = _mediaDiskCache.get(remoteUrl);
+    if (cached) {
+      const hasExt = cached.split("?")[0].includes(".");
+      if (!hasExt) {
+        _mediaDiskCache.delete(remoteUrl);
+        setLocalUrl(null);
+      } else {
+        setLocalUrl(cached);
+        return;
+      }
+    }
+
+    if (!isOnline || !RNFS) return;
+    if (downloading.current) return;
+    downloading.current = true;
+
+    const filename = _safeFilename(remoteUrl, mediaType);
+    const destPath = `${RNFS.CachesDirectoryPath}/media_cache/${filename}`;
+
+    RNFS.mkdir(`${RNFS.CachesDirectoryPath}/media_cache`)
+      .catch(() => {})
+      .then(() => RNFS.exists(destPath))
+      .then((exists: boolean) => {
+        if (exists) {
+          const fileUrl = `file://${destPath}`;
+          _mediaDiskCache.set(remoteUrl, fileUrl);
+          setLocalUrl(fileUrl);
+          downloading.current = false;
+          return;
+        }
+        return RNFS.downloadFile({ fromUrl: remoteUrl, toFile: destPath }).promise
+          .then((res: any) => {
+            if (res.statusCode === 200) {
+              const fileUrl = `file://${destPath}`;
+              _mediaDiskCache.set(remoteUrl, fileUrl);
+              setLocalUrl(fileUrl);
+            }
+          });
+      })
+      .catch(() => {})
+      .finally(() => { downloading.current = false; });
+  }, [remoteUrl, isOnline]);
+
+  // Онлайн и нет кэша — отдаём remote сразу, кэш скачается в фоне
+  if (isOnline && !localUrl) return { url: remoteUrl, cached: false };
+  return { url: localUrl, cached: !!localUrl };
+}
+
+// ─── Плейсхолдер для медиа недоступного оффлайн ──────────────────────────────
+const MEDIA_OFFLINE_LABELS: Partial<Record<MessageType, { icon: string; label: string }>> = {
+  IMAGE: { icon: "image",     label: "Фото"     },
+  VIDEO: { icon: "video",     label: "Видео"     },
+  VOICE: { icon: "mic",       label: "Голосовое" },
+  AUDIO: { icon: "mic",       label: "Голосовое" },
+  MUSIC: { icon: "music",     label: "Музыка"    },
+  FILE:  { icon: "paperclip", label: "Файл"      },
+};
+
+const MediaOfflinePlaceholder: React.FC<{ type: MessageType; isOwn: boolean }> = ({ type, isOwn }) => {
+  const info = MEDIA_OFFLINE_LABELS[type] ?? { icon: "paperclip", label: "Медиа" };
+  return (
+    <View style={mopS.wrap}>
+      <Icon name={info.icon as any} size={15} color={isOwn ? colors.text + "80" : colors.primary + "60"} />
+      <Text style={[mopS.label, isOwn ? mopS.labelOwn : mopS.labelOther]}>{info.label}</Text>
+      <View style={[mopS.badge, isOwn ? mopS.badgeOwn : mopS.badgeOther]}>
+        <Icon name="wifi-off" size={10} color={isOwn ? colors.text + "70" : colors.primary + "50"} />
+        <Text style={[mopS.badgeText, isOwn ? mopS.badgeTextOwn : mopS.badgeTextOther]}>недоступно</Text>
+      </View>
+    </View>
+  );
+};
+const mopS = StyleSheet.create({
+  wrap:           { flexDirection: "row", alignItems: "center", gap: 7, paddingVertical: 4, paddingHorizontal: 2, minWidth: 160 },
+  label:          { fontSize: 14, fontWeight: "500", flex: 1 },
+  labelOwn:       { color: colors.text + "CC" },
+  labelOther:     { color: colors.primary },
+  badge:          { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 8 },
+  badgeOwn:       { backgroundColor: "rgba(255,255,255,0.12)" },
+  badgeOther:     { backgroundColor: colors.primary + "12" },
+  badgeText:      { fontSize: 10, fontWeight: "600" },
+  badgeTextOwn:   { color: colors.text + "70" },
+  badgeTextOther: { color: colors.primary + "55" },
+});
 
 // ─── Кеш позиции скролла по chatId — переживает размонтирование компонента ────
 const _scrollOffsetCache = new Map<number, number>();
@@ -814,13 +951,15 @@ const GlobalAudio = {
 const MAX_MEDIA_W = Math.min(SCREEN_W * 0.72, 280);
 const MAX_MEDIA_H = SCREEN_H * 0.5;
 
-const ImageMessage: React.FC<{ url: string }> = React.memo(({ url }) => {
+const ImageMessage: React.FC<{ url: string; isOwn: boolean }> = React.memo(({ url, isOwn }) => {
+  const { url: resolvedUrl } = useMediaUrl(url, "IMAGE");
   const [fullscreen, setFullscreen] = useState(false);
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
 
   useEffect(() => {
+    if (!resolvedUrl) return;
     Image.getSize(
-      url,
+      resolvedUrl,
       (w, h) => {
         const ratio = w / h;
         let width = MAX_MEDIA_W;
@@ -830,7 +969,10 @@ const ImageMessage: React.FC<{ url: string }> = React.memo(({ url }) => {
       },
       () => setSize({ width: MAX_MEDIA_W, height: MAX_MEDIA_W * 0.75 }),
     );
-  }, [url]);
+  }, [resolvedUrl]);
+
+  // Оффлайн и не кешировано
+  if (!resolvedUrl) return <MediaOfflinePlaceholder type="IMAGE" isOwn={isOwn} />;
 
   const imgStyle = size
     ? { width: size.width, height: size.height, borderRadius: 12 }
@@ -840,7 +982,7 @@ const ImageMessage: React.FC<{ url: string }> = React.memo(({ url }) => {
     <>
       <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.92}>
         {size
-          ? <Image source={{ uri: url }} style={imgStyle} resizeMode="cover" />
+          ? <Image source={{ uri: resolvedUrl }} style={imgStyle} resizeMode="cover" />
           : <View style={[imgStyle, { backgroundColor: colors.secondary + "40", alignItems: "center", justifyContent: "center" }]}>
               <ActivityIndicator color={colors.accent} />
             </View>}
@@ -848,7 +990,7 @@ const ImageMessage: React.FC<{ url: string }> = React.memo(({ url }) => {
       <Modal visible={fullscreen} transparent animationType="fade" onRequestClose={() => setFullscreen(false)} statusBarTranslucent>
         <View style={imS.backdrop}>
           <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setFullscreen(false)} />
-          <Image source={{ uri: url }} style={imS.fullImg} resizeMode="contain" />
+          <Image source={{ uri: resolvedUrl }} style={imS.fullImg} resizeMode="contain" />
           <TouchableOpacity style={imS.closeBtn} onPress={() => setFullscreen(false)}>
             <Icon name="x" size={22} color="#fff" />
           </TouchableOpacity>
@@ -907,6 +1049,7 @@ const DoubleTapZone: React.FC<{
 // VideoMessage — встроенный плеер + полноэкранный с прогрессом, ±10с, 2x
 // ══════════════════════════════════════════════════════════════════════════════
 const VideoMessage: React.FC<{ url: string; isOwn: boolean; inView?: boolean }> = React.memo(({ url, isOwn, inView = true }) => {
+  const { url: resolvedUrl } = useMediaUrl(url, "VIDEO");
   const [muted, setMuted]             = useState(true);
   const [fullscreen, setFullscreen]   = useState(false);
   const [fsPaused, setFsPaused]       = useState(false);
@@ -1057,7 +1200,7 @@ const VideoMessage: React.FC<{ url: string; isOwn: boolean; inView?: boolean }> 
     return (
       <TouchableOpacity
         style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 4, paddingVertical: 4 }}
-        onPress={() => Linking.openURL(url)}
+        onPress={() => resolvedUrl && Linking.openURL(resolvedUrl)}
       >
         <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.25)", alignItems: "center", justifyContent: "center" }}>
           <Icon name="play" size={16} color="#fff" />
@@ -1067,12 +1210,14 @@ const VideoMessage: React.FC<{ url: string; isOwn: boolean; inView?: boolean }> 
     );
   }
 
+  if (!resolvedUrl) return <MediaOfflinePlaceholder type="VIDEO" isOwn={isOwn} />;
+
   return (
     <>
       <View style={[vmS.container, { width: size.width, height: size.height }]}>
         <VideoPlayer
           ref={videoRef}
-          source={{ uri: url }}
+          source={{ uri: resolvedUrl }}
           style={StyleSheet.absoluteFill}
           resizeMode="cover"
           paused={!inView || fullscreen}
@@ -1098,7 +1243,7 @@ const VideoMessage: React.FC<{ url: string; isOwn: boolean; inView?: boolean }> 
         <View style={vmS.fsBackdrop}>
           <VideoPlayer
             ref={fsVideoRef}
-            source={{ uri: url }}
+            source={{ uri: resolvedUrl }}
             style={StyleSheet.absoluteFill}
             resizeMode="contain"
             paused={fsPaused}
@@ -1452,11 +1597,11 @@ function useVideoAudioPlayer(
 const WAVEFORM_BARS = 30;
 
 const AudioMessage: React.FC<{ url: string; isOwn: boolean }> = React.memo(({ url, isOwn }) => {
-  const { playing, currentTime, duration, loading, handlePlayPause, fmtSec, audioNode, progressAnim } = useVideoAudioPlayer(url, { type: "VOICE", title: "Голосовое сообщение" });
+  const { url: resolvedUrl } = useMediaUrl(url, "VOICE");
+  const { playing, currentTime, duration, loading, handlePlayPause, fmtSec, audioNode, progressAnim } = useVideoAudioPlayer(resolvedUrl ?? "", { type: "VOICE", title: "Голосовое сообщение" });
   const gp = useGlobalPlayer();
 
   const [cachedDur, setCachedDur] = useState(() => gp.durationCache.current[url] ?? 0);
-  // Обновляем когда трек стал активным и загрузился
   useEffect(() => { if (duration > 0) setCachedDur(duration); }, [duration]);
   const handlePrefetchReady = useCallback((dur: number) => setCachedDur(dur), []);
 
@@ -1471,7 +1616,6 @@ const AudioMessage: React.FC<{ url: string; isOwn: boolean }> = React.memo(({ ur
     });
   }, [url]);
 
-  // Подписываемся на Animated.Value чтобы обновлять только счётчик баров без лишних рендеров компонента
   const [playedCount, setPlayedCount] = useState(0);
   useEffect(() => {
     const id = progressAnim.addListener(({ value }) => {
@@ -1480,14 +1624,16 @@ const AudioMessage: React.FC<{ url: string; isOwn: boolean }> = React.memo(({ ur
     return () => progressAnim.removeListener(id);
   }, [progressAnim]);
 
+  if (!resolvedUrl) return <MediaOfflinePlaceholder type="VOICE" isOwn={isOwn} />;
+
   return (
     <View style={amS.row}>
       {audioNode}
-      <DurationPrefetcher url={url} onReady={handlePrefetchReady} />
+      <DurationPrefetcher url={resolvedUrl} onReady={handlePrefetchReady} />
       <TouchableOpacity style={amS.playBtn} onPress={handlePlayPause} activeOpacity={0.8} disabled={loading}>
         {loading
-          ? <ActivityIndicator size="small" color="#fff" />
-          : <Icon name={playing ? "pause" : "play"} size={16} color="#fff" style={playing ? {} : { marginLeft: 2 }} />}
+          ? <ActivityIndicator size="small" color={colors.accent} />
+          : <Icon name={playing ? "pause" : "play"} size={16} color={colors.accent} style={playing ? {} : { marginLeft: 2 }} />}
       </TouchableOpacity>
       <View style={amS.waveWrap}>
         <View style={amS.wave}>
@@ -1516,19 +1662,20 @@ const AudioMessage: React.FC<{ url: string; isOwn: boolean }> = React.memo(({ ur
 const amS = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", gap: 10, minWidth: 210 },
   playBtn: {
-    width: 38, height: 38, borderRadius: 19, backgroundColor: colors.accent,
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: colors.secondary + "60",
+    borderWidth: 1.5, borderColor: colors.accent + "90",
     alignItems: "center", justifyContent: "center",
-    shadowColor: colors.accent, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 4, elevation: 4,
   },
   waveWrap: { flex: 1, gap: 5 },
-  wave: { flexDirection: "row", alignItems: "center", gap: 2, height: 30 },
+  wave: { flexDirection: "row", alignItems: "center", gap: 2, height: 32 },
   bar: { width: 3, borderRadius: 2 },
-  barIdle:      { backgroundColor: colors.primary + "35" },
-  barIdleOwn:   { backgroundColor: colors.text + "45" },
+  barIdle:      { backgroundColor: colors.primary + "40" },
+  barIdleOwn:   { backgroundColor: colors.primary + "50" },
   barPlayed:    { backgroundColor: colors.accent },
-  barPlayedOwn: { backgroundColor: colors.text + "CC" },
+  barPlayedOwn: { backgroundColor: colors.accent + "DD" },
   timer: { fontSize: 11, color: colors.primary + "60", fontVariant: ["tabular-nums"] },
-  timerOwn: { color: colors.text + "90" },
+  timerOwn: { color: colors.primary + "80" },
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1541,12 +1688,11 @@ const MusicMessage: React.FC<{
   coverUrl: string | null;
   isOwn: boolean;
 }> = React.memo(({ url, title, artist, coverUrl, isOwn }) => {
-  const { playing, currentTime, duration, loading, handlePlayPause, seek, fmtSec, audioNode, progressAnim } = useVideoAudioPlayer(url, { type: "MUSIC", title, artist, coverUrl });
+  const { url: resolvedUrl } = useMediaUrl(url, "MUSIC");
+  const { playing, currentTime, duration, loading, handlePlayPause, seek, fmtSec, audioNode, progressAnim } = useVideoAudioPlayer(resolvedUrl ?? "", { type: "MUSIC", title, artist, coverUrl });
   const gp = useGlobalPlayer();
 
-  // Длительность из кеша пока трек неактивен
   const [cachedDur, setCachedDur] = useState(() => gp.durationCache.current[url] ?? 0);
-  // Обновляем когда трек стал активным и загрузился
   useEffect(() => { if (duration > 0) setCachedDur(duration); }, [duration]);
   const handlePrefetchReady = useCallback((dur: number) => setCachedDur(dur), []);
 
@@ -1603,10 +1749,12 @@ const MusicMessage: React.FC<{
   // Animated позиция большого пальца
   const thumbLeft = scrubAnim.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] });
 
+  if (!resolvedUrl) return <MediaOfflinePlaceholder type="MUSIC" isOwn={isOwn} />;
+
   return (
     <View style={muS.card}>
       {audioNode}
-      <DurationPrefetcher url={url} onReady={handlePrefetchReady} />
+      <DurationPrefetcher url={resolvedUrl} onReady={handlePrefetchReady} />
       <View style={muS.top}>
         <View style={muS.coverWrap}>
           {coverUrl && !coverError
@@ -1691,6 +1839,210 @@ const muS = StyleSheet.create({
 
 
 
+// ══════════════════════════════════════════════════════════════════════════════
+// CircleVideoMessage — видео-кружок как в Telegram (VIDEO_NOTE)
+// ══════════════════════════════════════════════════════════════════════════════
+const CIRCLE_MSG_SIZE = 200;
+
+const CircleVideoMessage: React.FC<{ url: string; isOwn: boolean; inView?: boolean }> = React.memo(({ url, isOwn, inView = true }) => {
+
+  const { url: resolvedUrl } = useMediaUrl(url, "VIDEO");
+  const [muted, setMuted]       = useState(true);
+  const [paused, setPaused]     = useState(false); // автовоспроизведение как VideoMessage
+  const [progress, setProgress] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const videoRef    = useRef<any>(null);
+  const prevInView  = useRef(inView);
+  const deregRef    = useRef<(() => void) | null>(null);
+  const gp          = useGlobalPlayer();
+
+  const fmtSec = (s: number) => `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, "0")}`;
+
+  // Автопауза когда уходит из видимой области (как у VideoMessage)
+  useEffect(() => {
+    if (!inView && prevInView.current) {
+      setPaused(true);
+      setMuted(true);
+      deregRef.current?.();
+      deregRef.current = null;
+      videoRef.current?.seek(0);
+      setProgress(0);
+    }
+    if (inView && !prevInView.current) {
+      setPaused(false);
+    }
+    prevInView.current = inView;
+  }, [inView]);
+
+  // Если глобальный аудио-плеер запустился — глушим
+  useEffect(() => {
+    if (gp.playing && !muted) {
+      setMuted(true);
+      deregRef.current?.();
+      deregRef.current = null;
+    }
+  }, [gp.playing]);
+
+  // Тап — переключить звук (как VideoMessage)
+  const handlePress = useCallback(() => {
+    if (paused) {
+      // Был на паузе — возобновить без звука
+      setPaused(false);
+      return;
+    }
+    if (muted) {
+      if (!gp.playing) {
+        setMuted(false);
+        deregRef.current?.();
+        deregRef.current = GlobalAudio.register(() => setMuted(true));
+      }
+    } else {
+      setMuted(true);
+      deregRef.current?.();
+      deregRef.current = null;
+    }
+  }, [paused, muted, gp.playing]);
+
+  const onLoad = useCallback((data: any) => {
+    setDuration(data.duration ?? 0);
+  }, []);
+
+  const onProgress = useCallback((data: any) => {
+    if (duration > 0) setProgress(data.currentTime / duration);
+  }, [duration]);
+
+  const onEnd = useCallback(() => {
+    setPaused(true);
+    setMuted(true);
+    setProgress(0);
+    deregRef.current?.();
+    deregRef.current = null;
+    videoRef.current?.seek(0);
+  }, []);
+
+  if (!resolvedUrl) return <MediaOfflinePlaceholder type="VIDEO" isOwn={isOwn} />;
+
+  const strokeColor = isOwn ? colors.text : colors.accent;
+
+  return (
+    <TouchableOpacity onPress={handlePress} activeOpacity={0.92} style={[cvS.wrap, isOwn ? cvS.wrapOwn : cvS.wrapOther]}>
+      {/* Прогресс-кольцо */}
+      <View style={[cvS.ring, { borderColor: !paused ? strokeColor : colors.primary + "30" }]}>
+        <View style={cvS.circle}>
+          {VideoPlayer ? (
+            // Двойной overflow:hidden — внешний View гарантирует обрезку на Android
+            // где react-native-video игнорирует overflow родителя
+            <View style={{
+              width: CIRCLE_MSG_SIZE,
+              height: CIRCLE_MSG_SIZE,
+              borderRadius: 16,
+              overflow: "hidden",
+              position: "absolute",
+              top: 0, left: 0,
+            }}>
+              <VideoPlayer
+                ref={videoRef}
+                source={{ uri: resolvedUrl }}
+                style={{
+                  position: "absolute",
+                  top: 0, left: 0,
+                  width: CIRCLE_MSG_SIZE,
+                  height: CIRCLE_MSG_SIZE,
+                }}
+                paused={paused}
+                resizeMode="cover"
+                repeat={false}
+                muted={muted}
+                onLoad={onLoad}
+                onProgress={onProgress}
+                onEnd={onEnd}
+              />
+            </View>
+          ) : (
+            <View style={cvS.placeholder}>
+              <Icon name="video" size={32} color={colors.text + "80"} />
+            </View>
+          )}
+          {/* Иконка состояния — пауза или без звука */}
+          {paused && (
+            <View style={cvS.playOverlay}>
+              <View style={cvS.playBtn}>
+                <Icon name="play" size={22} color="#fff" style={{ marginLeft: 3 }} />
+              </View>
+            </View>
+          )}
+          {!paused && muted && (
+            <View style={cvS.muteIndicator}>
+              <Icon name="volume-x" size={12} color="#fff" />
+            </View>
+          )}
+          {/* Таймер */}
+          <View style={cvS.timerWrap}>
+            <Text style={cvS.timer}>
+              {duration > 0
+                ? (paused && progress === 0 ? fmtSec(duration) : fmtSec(progress * duration))
+                : ""}
+            </Text>
+          </View>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+});
+
+const cvS = StyleSheet.create({
+  wrap:      { width: CIRCLE_MSG_SIZE + 11, height: CIRCLE_MSG_SIZE + 11 },
+  wrapOwn:   {},
+  wrapOther: {},
+  ring: {
+    width:  CIRCLE_MSG_SIZE + 11,
+    height: CIRCLE_MSG_SIZE + 11,
+    borderRadius: 20,
+    borderWidth: 2.5,
+    borderColor: colors.primary + "30",
+    padding: 2.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  circle: {
+    width: CIRCLE_MSG_SIZE,
+    height: CIRCLE_MSG_SIZE,
+    borderRadius: 16,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#000",
+  },
+  video: {
+    width: CIRCLE_MSG_SIZE,
+    height: CIRCLE_MSG_SIZE,
+  },
+  placeholder: { alignItems: "center", justifyContent: "center", flex: 1 },
+  playOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center", justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.18)",
+  },
+  playBtn: {
+    width: 52, height: 52, borderRadius: 26,
+    backgroundColor: "rgba(0,0,0,0.50)",
+    alignItems: "center", justifyContent: "center",
+  },
+  muteIndicator: {
+    position: "absolute", bottom: 10, left: 10,
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: "rgba(0,0,0,0.50)",
+    alignItems: "center", justifyContent: "center",
+  },
+  timerWrap: {
+    position: "absolute", bottom: 10,
+    alignSelf: "center",
+    backgroundColor: "rgba(0,0,0,0.45)",
+    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3,
+  },
+  timer: { fontSize: 12, color: "#fff", fontVariant: ["tabular-nums"], fontWeight: "600" },
+});
+
 interface BubbleProps {
   message: Message;
   isOwn: boolean;
@@ -1738,7 +2090,7 @@ const MessageBubble: React.FC<BubbleProps> = React.memo(({
     const url = (message as any).mediaUrl ?? message.content;
     switch (message.type) {
       case "IMAGE":
-        return url ? <ImageMessage url={url} /> : <Text style={[bS.text, isOwn && bS.textOwn]}>🖼 Фото</Text>;
+        return url ? <ImageMessage url={url} isOwn={isOwn} /> : <Text style={[bS.text, isOwn && bS.textOwn]}>🖼 Фото</Text>;
       case "VIDEO":
         return <VideoMessage url={url ?? ""} isOwn={isOwn} inView={inView} />;
       case "VOICE":
@@ -1801,51 +2153,87 @@ const MessageBubble: React.FC<BubbleProps> = React.memo(({
       android_disableSound
       onLayout={(e) => onLayout?.(message.id, e.nativeEvent.layout.y, e.nativeEvent.layout.height)}
     >
-      <Animated.View style={[bS.row, isOwn ? bS.rowOwn : bS.rowOther, { backgroundColor: rowBg }]}>
-        {isSelectMode && (
-          <View style={[bS.check, isSelected && bS.checkActive]}>
-            {isSelected && <Icon name="check" size={11} color={colors.text} />}
-          </View>
-        )}
-        {!isOwn && (
-          <View style={bS.avatarCol}>
-            {showAvatar
-              ? (message.sender?.avatarUrl
-                ? <Image source={{ uri: message.sender.avatarUrl }} style={bS.avatar} />
-                : <View style={bS.avatarPh}><Text style={bS.avatarIn}>{initials}</Text></View>)
-              : <View style={bS.avatarSpacer} />
-            }
-          </View>
-        )}
-        <View style={[bS.col, isOwn && bS.colOwn, (message.type === "IMAGE" || message.type === "VIDEO") && bS.colMedia]}>
+      {(message.type as any) === "VIDEO_NOTE" ? (
+        // ── Кружок — полностью изолированный рендер ──────────────────────────
         <View style={[
-            message.type === "IMAGE" || message.type === "VIDEO"
-              ? bS.bubbleMedia
-              : [bS.bubble, isOwn ? bS.bubbleOwn : bS.bubbleOther],
-          ]}>
-            {message.forwardedFrom && <ForwardedBubble message={message} isOwn={isOwn} />}
-            {renderContent()}
-            <View style={[bS.meta, (message.type === "IMAGE" || message.type === "VIDEO") && bS.metaOnMedia]}>
-              {isEdited && <Text style={[bS.edited, isOwn && bS.editedOwn]}>изм.</Text>}
-              <Text style={[bS.time, isOwn && bS.timeOwn, (message.type === "IMAGE" || message.type === "VIDEO") && bS.timeOnMedia]}>{time}</Text>
-              {isOwn && <MessageStatus message={message} isOwn={isOwn} />}
-            </View>
+          bS.rowCircleWrap,
+          isOwn ? bS.rowCircleWrapOwn : bS.rowCircleWrapOther,
+          { backgroundColor: rowBg as any },
+        ]}>
+          <CircleVideoMessage url={(message as any).mediaUrl ?? message.content ?? ""} isOwn={isOwn} inView={inView} />
+          <View style={[bS.metaCircle, isOwn ? bS.metaCircleOwn : bS.metaCircleOther]}>
+            {isEdited && <Text style={[bS.edited, isOwn && bS.editedOwn]}>изм.</Text>}
+            <Text style={[bS.time, isOwn && bS.timeOwn]}>{time}</Text>
+            {isOwn && <MessageStatus message={message} isOwn={isOwn} />}
           </View>
-          {Object.keys(grouped).length > 0 && (
-            <View style={[bS.reactRow, isOwn && bS.reactRowOwn]}>
-              {Object.entries(grouped).map(([emoji, count]) => (
-                <TouchableOpacity
-                  key={emoji} style={bS.reactChip}
-                  onPress={() => onReact(message.id, emoji)} activeOpacity={0.7}
-                >
-                  <Text style={bS.reactEmoji}>{emoji}</Text>
-                  {count > 1 && <Text style={bS.reactCount}>{count}</Text>}
-                </TouchableOpacity>
-              ))}
+        </View>
+      ) : (
+        <Animated.View style={[
+          bS.row,
+          isOwn ? bS.rowOwn : bS.rowOther,
+          { backgroundColor: rowBg },
+        ]}>
+          {isSelectMode && (
+            <View style={[bS.check, isSelected && bS.checkActive]}>
+              {isSelected && <Icon name="check" size={11} color={colors.text} />}
             </View>
           )}
-        </View>
-      </Animated.View>
+          {!isOwn && (
+            <View style={bS.avatarCol}>
+              {showAvatar
+                ? (message.sender?.avatarUrl
+                  ? <Image source={{ uri: message.sender.avatarUrl }} style={bS.avatar} />
+                  : <View style={bS.avatarPh}><Text style={bS.avatarIn}>{initials}</Text></View>)
+                : <View style={bS.avatarSpacer} />
+              }
+            </View>
+          )}
+          <View style={[bS.col, isOwn && bS.colOwn, (message.type === "IMAGE" || message.type === "VIDEO") && bS.colMedia]}>
+          <View style={[
+              message.type === "IMAGE" || message.type === "VIDEO"
+                ? bS.bubbleMedia
+                : [bS.bubble, isOwn ? bS.bubbleOwn : bS.bubbleOther],
+            ]}>
+              {message.forwardedFrom && <ForwardedBubble message={message} isOwn={isOwn} />}
+              {message.type === "TEXT" ? (
+                <View style={bS.textWrap}>
+                  <Text style={[bS.text, isOwn && bS.textOwn]}>
+                    {message.content ?? ""}
+                    {"  "}
+                  </Text>
+                  <View style={[bS.metaInline, isOwn && bS.metaInlineOwn]}>
+                    {isEdited && <Text style={[bS.edited, isOwn && bS.editedOwn]}>изм.</Text>}
+                    <Text style={[bS.time, isOwn && bS.timeOwn]}>{time}</Text>
+                    {isOwn && <MessageStatus message={message} isOwn={isOwn} />}
+                  </View>
+                </View>
+              ) : (
+                <>
+                  {renderContent()}
+                  <View style={[bS.meta, (message.type === "IMAGE" || message.type === "VIDEO") && bS.metaOnMedia]}>
+                    {isEdited && <Text style={[bS.edited, isOwn && bS.editedOwn]}>изм.</Text>}
+                    <Text style={[bS.time, isOwn && bS.timeOwn, (message.type === "IMAGE" || message.type === "VIDEO") && bS.timeOnMedia]}>{time}</Text>
+                    {isOwn && <MessageStatus message={message} isOwn={isOwn} />}
+                  </View>
+                </>
+              )}
+            </View>
+            {Object.keys(grouped).length > 0 && (
+              <View style={[bS.reactRow, isOwn && bS.reactRowOwn]}>
+                {Object.entries(grouped).map(([emoji, count]) => (
+                  <TouchableOpacity
+                    key={emoji} style={bS.reactChip}
+                    onPress={() => onReact(message.id, emoji)} activeOpacity={0.7}
+                  >
+                    <Text style={bS.reactEmoji}>{emoji}</Text>
+                    {count > 1 && <Text style={bS.reactCount}>{count}</Text>}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        </Animated.View>
+      )}
     </Pressable>
   );
 });
@@ -1860,7 +2248,9 @@ const MessageStatus: React.FC<{ message: Message; isOwn: boolean }> = React.memo
   const isPending = message.id < 0;
   const isRead    = Array.isArray(message.readReceipts) && message.readReceipts.length > 0;
 
-  const color = isOwn ? (colors.text + "AA") : (colors.primary + "60");
+  const color = isRead
+    ? colors.accent + "CC"
+    : colors.primary + "70";
 
   if (isPending) {
     // "–" — ожидает отправки
@@ -1883,31 +2273,43 @@ const MessageStatus: React.FC<{ message: Message; isOwn: boolean }> = React.memo
 
 const stS = StyleSheet.create({
   wrap: {
-    width: 13, height: 13, position: "relative",
+    width: 14, height: 14, position: "relative",
     alignItems: "center", justifyContent: "center",
   },
   // Кружок для прочитанного статуса
   circle: {
     position: "absolute",
-    width: 13, height: 13, borderRadius: 6.5,
-    borderWidth: 1.5, borderColor: colors.text + "AA",
+    width: 14, height: 14, borderRadius: 7,
+    borderWidth: 1.5, borderColor: colors.accent + "CC",
   },
   // Две линии образуют X
   line: {
     position: "absolute",
-    width: 9, height: 1.7, borderRadius: 1,
+    width: 7, height: 1.5, borderRadius: 1,
   },
   line1: { transform: [{ rotate: "45deg" }] },
   line2: { transform: [{ rotate: "-45deg" }] },
   // Тире для pending
   dash: {
     width: 8, height: 1.7, borderRadius: 1,
-    backgroundColor: colors.text + "AA",
+    backgroundColor: colors.primary + "60",
   },
 });
 
 const bS = StyleSheet.create({
   row: { flexDirection: "row", marginVertical: 2, paddingHorizontal: 12, alignItems: "flex-end" },
+  rowOwn: { justifyContent: "flex-end" },
+  rowOther: { justifyContent: "flex-start" },
+  // Кружок — отдельная колонка, фиксированная ширина и высота, никакого overflow
+  rowCircleWrap: {
+    flexDirection: "column",
+    paddingHorizontal: 12,
+    paddingVertical: 30,
+    minHeight: CIRCLE_MSG_SIZE + 11 + 24,
+  },
+  rowCircleWrapOwn:   { alignItems: "flex-end" },
+  rowCircleWrapOther: { alignItems: "flex-start" },
+  metaCircle: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4, paddingHorizontal: 2 },
   rowOwn: { justifyContent: "flex-end" },
   rowOther: { justifyContent: "flex-start" },
   check: {
@@ -1927,17 +2329,25 @@ const bS = StyleSheet.create({
   col: { maxWidth: "75%", alignItems: "flex-start" },
   colOwn: { alignItems: "flex-end" },
   colMedia: { maxWidth: "75%" }, // убираем растяжку — размер определяет само медиа
+  colMediaOwn: { alignItems: "flex-end" },
+  bubbleCircle: { backgroundColor: "transparent", marginBottom: 2 }, // кружок — без padding/border
   bubble: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, marginBottom: 2, overflow: "hidden" },
-  bubbleOwn: { backgroundColor: colors.accent, borderBottomRightRadius: 3 },
+  bubbleOwn: { backgroundColor: "#3a2040", borderBottomRightRadius: 3, borderWidth: 0.5, borderColor: colors.secondary + "90" },
   bubbleOther: { backgroundColor: colors.secondary + "35", borderBottomLeftRadius: 3, borderWidth: 0.5, borderColor: colors.primary + "20" },
   bubbleMedia: { borderRadius: 14, marginBottom: 2, overflow: "hidden", backgroundColor: "transparent" },
   text: { fontSize: 15, color: colors.primary, lineHeight: 21, paddingHorizontal: 2 },
   textOwn: { color: colors.text },
+  textWrap: { flexDirection: "row", flexWrap: "wrap", alignItems: "flex-end" },
+  metaInline: {
+    flexDirection: "row", alignItems: "center", gap: 3,
+    alignSelf: "flex-end", marginBottom: 1, marginLeft: 2,
+  },
+  metaInlineOwn: {},
   meta: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 4, marginTop: 4, paddingHorizontal: 2 },
-  time: { fontSize: 11, color: colors.primary + "60" },
-  timeOwn: { color: colors.text + "AA" },
+  time: { fontSize: 10, color: colors.primary + "60" },
+  timeOwn: { color: colors.primary + "80" },
   edited: { fontSize: 10, color: colors.primary + "50", fontStyle: "italic" },
-  editedOwn: { color: colors.text + "80" },
+  editedOwn: { color: colors.primary + "60" },
   mediaImg: { width: 220, height: 160, borderRadius: 12, marginBottom: 4 },
   mediaRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 4, paddingVertical: 4 },
   playBtn: {
@@ -1953,6 +2363,11 @@ const bS = StyleSheet.create({
   },
   timeOnMedia: { color: "#fff", fontSize: 11 },
   reactRowOwn: { justifyContent: "flex-end" },
+  // Кружок — явные width+height чтобы Android правильно считал высоту строки
+  circleCol:     { alignItems: "flex-start",  width: CIRCLE_MSG_SIZE + 11, alignSelf: "flex-start" },
+  circleColOwn:  { alignItems: "flex-end",    width: CIRCLE_MSG_SIZE + 11, alignSelf: "flex-end"   },
+  metaCircleOwn:   { justifyContent: "flex-end",  width: CIRCLE_MSG_SIZE + 11 },
+  metaCircleOther: { justifyContent: "flex-start", width: CIRCLE_MSG_SIZE + 11 },
   reactChip: {
     flexDirection: "row", alignItems: "center",
     backgroundColor: colors.secondary + "40", borderRadius: 10,
@@ -1963,216 +2378,610 @@ const bS = StyleSheet.create({
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// MediaPickerSheet — выбор файлов/фото/видео
+// MediaPickerSheet — Telegram-style: табы Галерея / Музыка / Документы
 // ══════════════════════════════════════════════════════════════════════════════
+
+// Lazy-load image-crop-picker
+let ImageCropPicker: any = null;
+try { ImageCropPicker = require("react-native-image-crop-picker"); } catch (_) {}
+
+// Lazy-load CameraRoll для чтения галереи без открытия системного UI
+let CameraRoll: any = null;
+try { CameraRoll = require("@react-native-camera-roll/camera-roll").CameraRoll; } catch (_) {}
+
+type GalleryPhoto = { uri: string; mime: string; size?: number; filename?: string; node?: any };
+type MusicFile = { uri: string; name: string; size: number; path: string };
+type DocFile   = { uri: string; name: string; size: number; path: string; ext: string };
+type Tab = "gallery" | "music" | "files";
+
+const GALLERY_COL = 3;
+const GALLERY_CELL = Math.floor((SCREEN_W - 2) / GALLERY_COL);
+
+// Форматируем размер файла
+function fmtSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} КБ`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
+}
+
+// Иконка документа по расширению
+function docIcon(ext: string): string {
+  const e = ext.toLowerCase();
+  if (/pdf/.test(e)) return "file-text";
+  if (/docx?|odt/.test(e)) return "file-text";
+  if (/xlsx?|csv|ods/.test(e)) return "grid";
+  if (/pptx?|odp/.test(e)) return "monitor";
+  if (/zip|rar|7z|tar|gz/.test(e)) return "package";
+  if (/txt|md/.test(e)) return "align-left";
+  return "paperclip";
+}
+
+const AUDIO_EXTS = /\.(mp3|m4a|aac|flac|ogg|opus|wav|wma|alac)$/i;
+const DOC_EXTS   = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|md|csv|zip|rar|7z)$/i;
+
+// Строим список папок динамически — надёжнее хардкода /sdcard/...
+function getMusicDirs(): string[] {
+  if (!RNFS) return [];
+  const bases: string[] = [];
+  try { if (RNFS.ExternalStorageDirectoryPath) bases.push(RNFS.ExternalStorageDirectoryPath); } catch {}
+  bases.push("/storage/emulated/0", "/sdcard");
+  const dirs: string[] = [];
+  for (const b of bases) {
+    dirs.push(`${b}/Music`, `${b}/music`, `${b}/Download`, `${b}/Downloads`, `${b}/MUSIC`, `${b}/Музыка`);
+  }
+  return [...new Set(dirs)];
+}
+
+function getDocDirs(): string[] {
+  if (!RNFS) return [];
+  const bases: string[] = [];
+  try { if (RNFS.ExternalStorageDirectoryPath) bases.push(RNFS.ExternalStorageDirectoryPath); } catch {}
+  bases.push("/storage/emulated/0", "/sdcard");
+  const dirs: string[] = [];
+  for (const b of bases) {
+    dirs.push(`${b}/Download`, `${b}/Downloads`, `${b}/Documents`, `${b}/Document`, `${b}/Документы`);
+  }
+  return [...new Set(dirs)];
+}
+
+// Сканирует папку + 1 уровень подпапок (Artist/Album и т.д.)
+async function scanDirs(dirs: string[], extRe: RegExp): Promise<{ path: string; name: string; size: number }[]> {
+  if (!RNFS) return [];
+  const results: { path: string; name: string; size: number }[] = [];
+
+  const scanOne = async (dir: string, depth: number) => {
+    try {
+      const items = await RNFS.readDir(dir);
+      for (const item of items) {
+        if (item.isFile() && extRe.test(item.name)) {
+          results.push({ path: item.path, name: item.name, size: Number(item.size) || 0 });
+        } else if (!item.isFile() && depth < 1) {
+          await scanOne(item.path, depth + 1);
+        }
+      }
+    } catch {}
+  };
+
+  for (const dir of dirs) {
+    try {
+      const exists = await RNFS.exists(dir);
+      if (!exists) continue;
+      await scanOne(dir, 0);
+    } catch {}
+  }
+
+  // Дедуп по полному пути
+  const seen = new Set<string>();
+  return results.filter((f) => { if (seen.has(f.path)) return false; seen.add(f.path); return true; });
+}
+
 const MediaPickerSheet: React.FC<{
   visible: boolean;
   onClose: () => void;
   onPick: (f: PickedFile) => void;
 }> = ({ visible, onClose, onPick }) => {
-  const slideY = useRef(new Animated.Value(300)).current;
+  const slideY = useRef(new Animated.Value(500)).current;
+  const [tab, setTab] = useState<Tab>("gallery");
+
+  // ── Галерея ──────────────────────────────────────────────────────────────
+  const [photos, setPhotos] = useState<GalleryPhoto[]>([]);
+  const [galleryLoading, setGalleryLoading] = useState(false);
+  const [galleryLoaded, setGalleryLoaded] = useState(false);
+  const [galleryCursor, setGalleryCursor] = useState<string | undefined>(undefined);
+  const [galleryHasMore, setGalleryHasMore] = useState(true);
+
+  // ── Музыка ───────────────────────────────────────────────────────────────
+  const [musicFiles, setMusicFiles] = useState<MusicFile[]>([]);
+  const [musicLoading, setMusicLoading] = useState(false);
+  const [musicLoaded, setMusicLoaded] = useState(false);
+
+  // ── Документы ────────────────────────────────────────────────────────────
+  const [docFiles, setDocFiles] = useState<DocFile[]>([]);
+  const [docLoading, setDocLoading] = useState(false);
+  const [docLoaded, setDocLoaded] = useState(false);
 
   useEffect(() => {
     if (visible) {
-      Animated.spring(slideY, { toValue: 0, useNativeDriver: true, tension: 80, friction: 12 }).start();
+      slideY.setValue(500);
+      Animated.spring(slideY, { toValue: 0, useNativeDriver: true, tension: 65, friction: 11 }).start();
+      setTab("gallery");
+      if (!galleryLoaded) loadGalleryPage();
     } else {
-      Animated.timing(slideY, { toValue: 300, duration: 200, useNativeDriver: true }).start();
+      Animated.timing(slideY, { toValue: 500, duration: 220, useNativeDriver: true }).start();
     }
   }, [visible]);
 
-  const checkSize = (size?: number | null): boolean => {
-    if (size && size > MAX_FILE_SIZE) {
-      Alert.alert("Файл слишком большой", "Максимальный размер — 100 МБ");
-      return false;
+  // Переключение таба — подгружаем данные лениво
+  useEffect(() => {
+    if (!visible) return;
+    if (tab === "music" && !musicLoaded) loadMusic();
+    if (tab === "files" && !docLoaded) loadDocs();
+  }, [tab, visible]);
+
+  // ── Запрос прав на медиа (Android 13+) ───────────────────────────────────
+  const requestMediaPermissions = async (): Promise<boolean> => {
+    if (Platform.OS !== "android") return true;
+    try {
+      const sdk = parseInt(Platform.Version as string, 10);
+      if (sdk >= 33) {
+        const res = await PermissionsAndroid.requestMultiple([
+          PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
+          "android.permission.READ_MEDIA_VIDEO" as any,
+        ]);
+        return Object.values(res).every((v) => v === PermissionsAndroid.RESULTS.GRANTED);
+      } else {
+        const res = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
+        return res === PermissionsAndroid.RESULTS.GRANTED;
+      }
+    } catch { return false; }
+  };
+
+  // ── Загрузка галереи через CameraRoll ────────────────────────────────────
+  const loadGalleryPage = async (cursor?: string) => {
+    if (galleryLoading) return;
+    setGalleryLoading(true);
+    try {
+      await requestMediaPermissions();
+      if (CameraRoll) {
+        // @react-native-camera-roll/camera-roll — читает без UI
+        const res = await CameraRoll.getPhotos({
+          first: 60,
+          after: cursor,
+          assetType: "All",          // и фото, и видео
+          include: ["filename", "fileSize", "fileExtension", "imageSize", "playableDuration"],
+        });
+        const newPhotos: GalleryPhoto[] = res.edges.map((e: any) => ({
+          uri:      e.node.image.uri,
+          mime:     e.node.type ?? "image/jpeg",
+          size:     e.node.image.fileSize ?? 0,
+          filename: e.node.image.filename ?? undefined,
+          node:     e.node,
+        }));
+        setPhotos((prev) => cursor ? [...prev, ...newPhotos] : newPhotos);
+        setGalleryCursor(res.page_info.has_next_page ? res.page_info.end_cursor : undefined);
+        setGalleryHasMore(res.page_info.has_next_page);
+        setGalleryLoaded(true);
+      } else if (ImageCropPicker) {
+        // Fallback — image-crop-picker (только изображения)
+        const result = await launchImageLibrary({ mediaType: "mixed", selectionLimit: 0, includeExtra: true });
+        const arr = result.assets ?? [];
+        setPhotos(arr.map((a: any) => ({
+          uri:      a.uri,
+          mime:     a.type ?? "image/jpeg",
+          size:     a.fileSize ?? 0,
+          filename: a.fileName ?? undefined,
+        })));
+        setGalleryLoaded(true);
+        setGalleryHasMore(false);
+      } else {
+        setGalleryLoaded(true);
+        setGalleryHasMore(false);
+      }
+    } catch {
+      setGalleryLoaded(true);
+      setGalleryHasMore(false);
+    } finally {
+      setGalleryLoading(false);
     }
+  };
+
+  // ── Загрузка музыки через RNFS ────────────────────────────────────────────
+  const loadMusic = async () => {
+    setMusicLoading(true);
+    try {
+      // Android 13+ требует READ_MEDIA_AUDIO для доступа к аудиофайлам
+      if (Platform.OS === "android") {
+        const sdk = parseInt(Platform.Version as string, 10);
+        if (sdk >= 33) {
+          await PermissionsAndroid.request("android.permission.READ_MEDIA_AUDIO" as any);
+        } else {
+          await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
+        }
+      }
+      const found = await scanDirs(getMusicDirs(), AUDIO_EXTS);
+      setMusicFiles(found.map((f) => ({ uri: `file://${f.path}`, name: f.name, size: f.size, path: f.path })));
+    } catch {}
+    setMusicLoaded(true);
+    setMusicLoading(false);
+  };
+
+  // ── Загрузка документов через RNFS ───────────────────────────────────────
+  const loadDocs = async () => {
+    setDocLoading(true);
+    try {
+      if (Platform.OS === "android") {
+        const sdk = parseInt(Platform.Version as string, 10);
+        if (sdk < 33) {
+          await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
+        }
+      }
+      const found = await scanDirs(getDocDirs(), DOC_EXTS);
+      setDocFiles(found.map((f) => {
+        const ext = f.name.split(".").pop() ?? "";
+        return { uri: `file://${f.path}`, name: f.name, size: f.size, path: f.path, ext };
+      }));
+    } catch {}
+    setDocLoaded(true);
+    setDocLoading(false);
+  };
+
+  const checkSize = (size?: number | null) => {
+    if (size && size > MAX_FILE_SIZE) { Alert.alert("Файл слишком большой", "Максимум 100 МБ"); return false; }
     return true;
   };
 
-  const go = async (action: () => Promise<void>) => {
+  const handleGalleryTap = (photo: GalleryPhoto) => {
+    if (!checkSize(photo.size)) return;
+    const isVideo = /video/i.test(photo.mime)
+      || /\.(mp4|mov|avi|mkv|webm)$/i.test(photo.filename ?? "")
+      || (photo.node?.type ?? "").startsWith("video");
+    onPick({
+      uri: photo.uri,
+      name: photo.filename ?? `media_${Date.now()}`,
+      type: photo.mime,
+      mediaType: isVideo ? "VIDEO" : "IMAGE",
+      size: photo.size ?? 0,
+    });
     onClose();
-    // небольшая задержка чтобы sheet успел закрыться перед открытием системного picker'а
+  };
+
+  const handleMusicTap = (f: MusicFile) => {
+    if (!checkSize(f.size)) return;
+    const ext = f.name.split(".").pop() ?? "";
+    const isVoice = /wav|ogg|opus/.test(ext);
+    onPick({ uri: f.uri, name: f.name, type: `audio/${ext || "mpeg"}`, mediaType: isVoice ? "VOICE" : "MUSIC", size: f.size });
+    onClose();
+  };
+
+  const handleDocTap = (f: DocFile) => {
+    if (!checkSize(f.size)) return;
+    onPick({ uri: f.uri, name: f.name, type: `application/${f.ext || "octet-stream"}`, mediaType: "FILE", size: f.size });
+    onClose();
+  };
+
+  // Камера — первая ячейка в галерее
+  const openCamera = async () => {
+    onClose();
     await new Promise((r) => setTimeout(r, 300));
     try {
-      await action();
-    } catch (err: any) {
-      // пользователь отменил — не показываем ошибку
-      if (err?.code !== "DOCUMENT_PICKER_CANCELED" && err?.code !== "camera_unavailable") {
-        Alert.alert("Ошибка", "Не удалось получить файл");
-      }
-    }
+      const r = await launchCamera({ mediaType: "photo", quality: 1, saveToPhotos: false });
+      if (r.didCancel) return;
+      const a = r.assets?.[0];
+      if (!a?.uri) return;
+      onPick({ uri: a.uri, name: a.fileName ?? `photo_${Date.now()}.jpg`, type: a.type ?? "image/jpeg", mediaType: "IMAGE", size: a.fileSize ?? 0 });
+    } catch {}
   };
 
-  const pickImage = async () => {
-    const r = await launchImageLibrary({
-      mediaType: "photo",
-      quality: 1,
-      selectionLimit: 1,
-    });
-    if (r.didCancel) return;
-    const a = r.assets?.[0];
-    if (!a?.uri) return;
-    if (!checkSize(a.fileSize)) return;
-    onPick({
-      uri: a.uri,
-      name: a.fileName ?? `photo_${Date.now()}.jpg`,
-      type: a.type ?? "image/jpeg",
-      mediaType: "IMAGE",
-      size: a.fileSize ?? 0,
-    });
-  };
-
-  const pickCamera = async () => {
-    const r = await launchCamera({
-      mediaType: "photo",
-      quality: 1,
-      saveToPhotos: false,
-    });
-    if (r.didCancel) return;
-    const a = r.assets?.[0];
-    if (!a?.uri) return;
-    if (!checkSize(a.fileSize)) return;
-    onPick({
-      uri: a.uri,
-      name: a.fileName ?? `photo_${Date.now()}.jpg`,
-      type: a.type ?? "image/jpeg",
-      mediaType: "IMAGE",
-      size: a.fileSize ?? 0,
-    });
-  };
-
-  const pickVideo = async () => {
-    const r = await launchImageLibrary({
-      mediaType: "video",
-      selectionLimit: 1,
-    });
-    if (r.didCancel) return;
-    const a = r.assets?.[0];
-    if (!a?.uri) return;
-    if (!checkSize(a.fileSize)) return;
-    onPick({
-      uri: a.uri,
-      name: a.fileName ?? `video_${Date.now()}.mp4`,
-      type: a.type ?? "video/mp4",
-      mediaType: "VIDEO",
-      size: a.fileSize ?? 0,
-    });
-  };
-
-  const pickAudio = async () => {
-    const results = await pick({
-      type: ["audio/*"],
-      allowMultiSelection: false,
-    });
-    const r = results?.[0];
-    if (!r?.uri) return;
-    const size = (r as any).size ?? 0;
-    if (!checkSize(size)) return;
-    const mime: string = (r as any).mimeType ?? r.type ?? "";
-    const name: string = r.name ?? `audio_${Date.now()}`;
-    // wav/ogg/webm/opus → голосовое, остальное → музыка
-    const isVoice = /wav|ogg|webm|opus/i.test(mime) || /\.(wav|ogg|webm|opus)$/i.test(name);
-    onPick({
-      uri: r.uri,
-      name,
-      type: mime || (isVoice ? "audio/wav" : "audio/mpeg"),
-      mediaType: isVoice ? "VOICE" : "MUSIC",
-      size,
-    });
-  };
-
-  const pickFile = async () => {
-    const results = await pick({
-      type: ["*/*"],
-      allowMultiSelection: false,
-    });
-    const r = results?.[0];
-    if (!r?.uri) return;
-    const size = (r as any).size ?? 0;
-    if (!checkSize(size)) return;
-    const mime: string = (r as any).mimeType ?? r.type ?? "application/octet-stream";
-    const name: string = r.name ?? `file_${Date.now()}`;
-
-    // Если выбран аудио файл через "Файл" — определяем правильный тип
-    let mediaType: PickedFile["mediaType"] = "FILE";
-    if (/^audio\//i.test(mime) || /\.(mp3|m4a|aac|flac|ogg|wav|opus|webm)$/i.test(name)) {
+  // Системный файловый пикер — аудио
+  const openAudio = async () => {
+    onClose();
+    await new Promise((r) => setTimeout(r, 300));
+    try {
+      const results = await pick({ type: ["audio/*"], allowMultiSelection: false });
+      const r = results?.[0]; if (!r?.uri) return;
+      const size = (r as any).size ?? 0; if (!checkSize(size)) return;
+      const mime: string = (r as any).mimeType ?? r.type ?? "";
+      const name: string = r.name ?? `audio_${Date.now()}`;
       const isVoice = /wav|ogg|webm|opus/i.test(mime) || /\.(wav|ogg|webm|opus)$/i.test(name);
-      mediaType = isVoice ? "VOICE" : "MUSIC";
-    }
-
-    onPick({
-      uri: r.uri,
-      name,
-      type: mime,
-      mediaType,
-      size,
-    });
+      onPick({ uri: r.uri, name, type: mime || "audio/mpeg", mediaType: isVoice ? "VOICE" : "MUSIC", size });
+    } catch {}
   };
 
-  const opts = [
-    { icon: "image",     label: "Фото",   color: "#6ecfff", action: () => go(pickImage) },
-    { icon: "camera",    label: "Камера", color: "#a0e4a0", action: () => go(pickCamera) },
-    { icon: "video",     label: "Видео",  color: "#ffb86c", action: () => go(pickVideo) },
-    { icon: "music",     label: "Аудио",  color: colors.accent, action: () => go(pickAudio) },
-    { icon: "paperclip", label: "Файл",   color: "#d0aeff", action: () => go(pickFile) },
+  // Системный файловый пикер — любые файлы
+  const openFile = async () => {
+    onClose();
+    await new Promise((r) => setTimeout(r, 300));
+    try {
+      const results = await pick({ type: ["*/*"], allowMultiSelection: false });
+      const r = results?.[0]; if (!r?.uri) return;
+      const size = (r as any).size ?? 0; if (!checkSize(size)) return;
+      const mime: string = (r as any).mimeType ?? r.type ?? "application/octet-stream";
+      const name: string = r.name ?? `file_${Date.now()}`;
+      let mediaType: PickedFile["mediaType"] = "FILE";
+      if (/^audio\//i.test(mime) || /\.(mp3|m4a|aac|flac|ogg|wav|opus|webm)$/i.test(name)) {
+        mediaType = /wav|ogg|webm|opus/i.test(mime) ? "VOICE" : "MUSIC";
+      }
+      onPick({ uri: r.uri, name, type: mime, mediaType, size });
+    } catch {}
+  };
+
+  const tabs: { key: Tab; label: string; icon: string }[] = [
+    { key: "gallery", label: "Галерея", icon: "image" },
+    { key: "music",   label: "Музыка",  icon: "music" },
+    { key: "files",   label: "Файлы",   icon: "paperclip" },
   ];
 
   if (!visible) return null;
 
   return (
-    <Modal
-      transparent
-      visible={visible}
-      animationType="none"
-      onRequestClose={onClose}
-      statusBarTranslucent
-    >
+    <Modal transparent visible={visible} animationType="none" onRequestClose={onClose} statusBarTranslucent>
       <TouchableWithoutFeedback onPress={onClose}>
         <View style={mpS.backdrop} />
       </TouchableWithoutFeedback>
+
       <Animated.View style={[mpS.sheet, { transform: [{ translateY: slideY }] }]}>
         <View style={mpS.handle} />
-        <Text style={mpS.title}>Прикрепить</Text>
-        <View style={mpS.grid}>
-          {opts.map((o) => (
-            <TouchableOpacity key={o.label} style={mpS.option} onPress={o.action} activeOpacity={0.7}>
-              <View style={[mpS.iconWrap, { backgroundColor: o.color + "25", borderColor: o.color + "60" }]}>
-                <Icon name={o.icon as any} size={24} color={o.color} />
-              </View>
-              <Text style={mpS.optLabel}>{o.label}</Text>
+
+        {/* ── Табы ─────────────────────────────────────────────── */}
+        <View style={mpS.tabRow}>
+          {tabs.map((t) => (
+            <TouchableOpacity
+              key={t.key}
+              style={[mpS.tabBtn, tab === t.key && mpS.tabBtnActive]}
+              onPress={() => setTab(t.key)}
+              activeOpacity={0.7}
+            >
+              <Icon name={t.icon as any} size={15} color={tab === t.key ? colors.accent : colors.primary + "70"} />
+              <Text style={[mpS.tabLabel, tab === t.key && mpS.tabLabelActive]}>{t.label}</Text>
             </TouchableOpacity>
           ))}
         </View>
-        <View style={{ height: Platform.OS === "ios" ? 32 : 20 }} />
+
+        {/* ── Галерея ───────────────────────────────────────────── */}
+        {tab === "gallery" && (
+          <>
+            {galleryLoading && photos.length === 0 ? (
+              <View style={mpS.center}><ActivityIndicator color={colors.accent} /></View>
+            ) : (
+              <FlatList
+                data={[{ _camera: true } as any, ...photos]}
+                keyExtractor={(_, i) => String(i)}
+                numColumns={GALLERY_COL}
+                scrollEnabled
+                showsVerticalScrollIndicator={false}
+                style={mpS.grid}
+                columnWrapperStyle={{ gap: 1 }}
+                ItemSeparatorComponent={() => <View style={{ height: 1 }} />}
+                onEndReached={() => { if (galleryHasMore && galleryCursor && !galleryLoading) loadGalleryPage(galleryCursor); }}
+                onEndReachedThreshold={0.4}
+                ListFooterComponent={galleryLoading && photos.length > 0 ? <ActivityIndicator color={colors.accent} style={{ marginVertical: 12 }} /> : null}
+                renderItem={({ item }) => {
+                  if (item._camera) {
+                    return (
+                      <TouchableOpacity
+                        style={[mpS.cell, mpS.cameraCell, { width: GALLERY_CELL, height: GALLERY_CELL }]}
+                        onPress={openCamera}
+                        activeOpacity={0.8}
+                      >
+                        <Icon name="camera" size={28} color={colors.primary + "80"} />
+                        <Text style={mpS.cameraLabel}>Камера</Text>
+                      </TouchableOpacity>
+                    );
+                  }
+                  const isVideo = /video/i.test(item.mime)
+                    || /\.(mp4|mov|avi|mkv|webm)$/i.test(item.filename ?? "")
+                    || (item.node?.type ?? "").startsWith("video");
+                  return (
+                    <TouchableOpacity
+                      style={[mpS.cell, { width: GALLERY_CELL, height: GALLERY_CELL }]}
+                      onPress={() => handleGalleryTap(item)}
+                      activeOpacity={0.82}
+                    >
+                      <Image source={{ uri: item.uri }} style={mpS.cellImg} resizeMode="cover" />
+                      {isVideo && (
+                        <View style={mpS.videoOverlay}>
+                          <View style={mpS.videoIcon}>
+                            <Icon name="play" size={11} color="#fff" />
+                          </View>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                }}
+                ListEmptyComponent={
+                  <View style={mpS.center}>
+                    <Icon name="image" size={36} color={colors.primary + "30"} />
+                    <Text style={mpS.emptyText}>Нет медиа</Text>
+                  </View>
+                }
+              />
+            )}
+          </>
+        )}
+
+        {/* ── Музыка ────────────────────────────────────────────── */}
+        {tab === "music" && (
+          <>
+            {musicLoading ? (
+              <View style={mpS.center}><ActivityIndicator color={colors.accent} /></View>
+            ) : musicFiles.length === 0 ? (
+              <View style={mpS.center}>
+                <View style={mpS.bigIconWrap}>
+                  <Icon name="music" size={32} color={colors.accent} />
+                </View>
+                <Text style={mpS.emptyTitle}>Музыка не найдена</Text>
+                <Text style={mpS.emptyText}>Выберите файл вручную</Text>
+                <TouchableOpacity style={mpS.tabActionBtn} onPress={openAudio} activeOpacity={0.8}>
+                  <Icon name="folder" size={16} color={colors.text} />
+                  <Text style={mpS.tabActionBtnText}>Открыть файлы</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <FlatList
+                data={musicFiles}
+                keyExtractor={(f) => f.path}
+                style={mpS.listFlex}
+                showsVerticalScrollIndicator={false}
+                ItemSeparatorComponent={() => <View style={mpS.separator} />}
+                ListHeaderComponent={
+                  <TouchableOpacity style={mpS.listHeader} onPress={openAudio} activeOpacity={0.8}>
+                    <Icon name="folder" size={15} color={colors.accent} />
+                    <Text style={mpS.listHeaderText}>Открыть другой файл...</Text>
+                  </TouchableOpacity>
+                }
+                renderItem={({ item }) => (
+                  <TouchableOpacity style={mpS.listRow} onPress={() => handleMusicTap(item)} activeOpacity={0.75}>
+                    <View style={mpS.listIconWrap}>
+                      <Icon name="music" size={18} color={colors.accent} />
+                    </View>
+                    <View style={mpS.listTextCol}>
+                      <Text style={mpS.listName} numberOfLines={1}>{item.name.replace(/\.[^.]+$/, "")}</Text>
+                      <Text style={mpS.listSub}>{fmtSize(item.size)}</Text>
+                    </View>
+                    <Icon name="chevron-right" size={16} color={colors.primary + "40"} />
+                  </TouchableOpacity>
+                )}
+              />
+            )}
+          </>
+        )}
+
+        {/* ── Документы / Файлы ─────────────────────────────────── */}
+        {tab === "files" && (
+          <>
+            {docLoading ? (
+              <View style={mpS.center}><ActivityIndicator color={colors.accent} /></View>
+            ) : docFiles.length === 0 ? (
+              <View style={mpS.center}>
+                <View style={[mpS.bigIconWrap, { borderColor: "#d0aeff40" }]}>
+                  <Icon name="paperclip" size={32} color="#d0aeff" />
+                </View>
+                <Text style={mpS.emptyTitle}>Файлы не найдены</Text>
+                <Text style={mpS.emptyText}>Любой формат до 100 МБ</Text>
+                <TouchableOpacity style={[mpS.tabActionBtn, { borderColor: "#d0aeff60" }]} onPress={openFile} activeOpacity={0.8}>
+                  <Icon name="folder" size={16} color={colors.text} />
+                  <Text style={mpS.tabActionBtnText}>Открыть файлы</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <FlatList
+                data={docFiles}
+                keyExtractor={(f) => f.path}
+                style={mpS.listFlex}
+                showsVerticalScrollIndicator={false}
+                ItemSeparatorComponent={() => <View style={mpS.separator} />}
+                ListHeaderComponent={
+                  <TouchableOpacity style={mpS.listHeader} onPress={openFile} activeOpacity={0.8}>
+                    <Icon name="folder" size={15} color="#d0aeff" />
+                    <Text style={[mpS.listHeaderText, { color: "#d0aeff" }]}>Открыть все файлы...</Text>
+                  </TouchableOpacity>
+                }
+                renderItem={({ item }) => (
+                  <TouchableOpacity style={mpS.listRow} onPress={() => handleDocTap(item)} activeOpacity={0.75}>
+                    <View style={[mpS.listIconWrap, { backgroundColor: "#d0aeff15" }]}>
+                      <Icon name={docIcon(item.ext) as any} size={18} color="#d0aeff" />
+                    </View>
+                    <View style={mpS.listTextCol}>
+                      <Text style={mpS.listName} numberOfLines={1}>{item.name}</Text>
+                      <Text style={mpS.listSub}>{item.ext.toUpperCase()}  •  {fmtSize(item.size)}</Text>
+                    </View>
+                    <Icon name="chevron-right" size={16} color={colors.primary + "40"} />
+                  </TouchableOpacity>
+                )}
+              />
+            )}
+          </>
+        )}
+
+        <View style={{ height: Platform.OS === "ios" ? 28 : 10 }} />
       </Animated.View>
     </Modal>
   );
 };
 const mpS = StyleSheet.create({
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.5)" },
+  backdrop:  { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.6)" },
   sheet: {
     position: "absolute", bottom: 0, left: 0, right: 0,
     backgroundColor: colors.background,
-    borderTopLeftRadius: 28, borderTopRightRadius: 28,
-    borderWidth: 1, borderColor: colors.primary + "20",
-    paddingHorizontal: 24, paddingTop: 8,
+    borderTopLeftRadius: 22, borderTopRightRadius: 22,
+    borderTopWidth: 1, borderColor: colors.primary + "18",
+    maxHeight: SCREEN_H * 0.75,
   },
-  handle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.primary + "40", alignSelf: "center", marginBottom: 16 },
-  title: { fontSize: 17, fontWeight: "700", color: colors.text, marginBottom: 20 },
-  grid: { flexDirection: "row", flexWrap: "wrap", gap: 16 },
-  option: { alignItems: "center", gap: 8, width: 60 },
-  iconWrap: { width: 60, height: 60, borderRadius: 18, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
-  optLabel: { fontSize: 12, fontWeight: "600", color: colors.primary, textAlign: "center" },
+  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: colors.primary + "35", alignSelf: "center", marginTop: 10, marginBottom: 10 },
+  // Табы
+  tabRow: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: colors.primary + "15", marginBottom: 2 },
+  tabBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10 },
+  tabBtnActive: { borderBottomWidth: 2, borderBottomColor: colors.accent },
+  tabLabel: { fontSize: 13, fontWeight: "600", color: colors.primary + "70" },
+  tabLabelActive: { color: colors.accent },
+  // Галерея
+  grid: { flex: 1 },
+  cell: { overflow: "hidden" },
+  cellImg: { width: "100%", height: "100%" },
+  cameraCell: { backgroundColor: colors.secondary + "30", alignItems: "center", justifyContent: "center", gap: 6 },
+  cameraLabel: { fontSize: 11, color: colors.primary + "70", fontWeight: "600" },
+  videoOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.15)", justifyContent: "flex-end", alignItems: "flex-start", padding: 4 },
+  videoIcon: {
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: "rgba(0,0,0,0.55)", alignItems: "center", justifyContent: "center",
+  },
+  // Пустые состояния
+  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 40 },
+  emptyTitle: { fontSize: 15, fontWeight: "700", color: colors.text },
+  emptyText: { fontSize: 13, color: colors.primary + "50" },
+  bigIconWrap: {
+    width: 72, height: 72, borderRadius: 22,
+    backgroundColor: colors.secondary + "40", borderWidth: 1, borderColor: colors.primary + "20",
+    alignItems: "center", justifyContent: "center", marginBottom: 4,
+  },
+  tabActionBtn: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    marginTop: 8, paddingHorizontal: 24, paddingVertical: 12,
+    borderRadius: 14, backgroundColor: colors.accent + "18",
+    borderWidth: 1.5, borderColor: colors.accent + "50",
+  },
+  tabActionBtnText: { fontSize: 14, fontWeight: "700", color: colors.text },
+  // Список музыки / документов
+  listFlex: { flex: 1 },
+  separator: { height: 1, backgroundColor: colors.primary + "0C", marginLeft: 64 },
+  listHeader: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    paddingHorizontal: 16, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: colors.primary + "12",
+  },
+  listHeaderText: { fontSize: 14, fontWeight: "600", color: colors.accent },
+  listRow: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    paddingHorizontal: 16, paddingVertical: 12,
+  },
+  listIconWrap: {
+    width: 40, height: 40, borderRadius: 12,
+    backgroundColor: colors.accent + "15",
+    alignItems: "center", justifyContent: "center",
+  },
+  listTextCol: { flex: 1 },
+  listName: { fontSize: 14, fontWeight: "600", color: colors.text },
+  listSub:  { fontSize: 12, color: colors.primary + "55", marginTop: 2 },
+  // Старые — нужны чтобы TS не ругался (openGalleryBtn/Text больше не нужны)
+  openGalleryBtn: {},
+  openGalleryText: {},
+  tabActionTitle: {},
+  tabActionSub: {},
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// AudioRecordingOverlay
+// AudioRecordingOverlay — два режима:
+//   обычный: зажата кнопка — таймер + "сдвиньте влево" + fade-отмена
+//   залоченный: палец отпущен, запись продолжается — таймер + "Отмена" + "Отправить"
 // ══════════════════════════════════════════════════════════════════════════════
 const AudioRecordingOverlay: React.FC<{
   visible: boolean;
   duration: number;
   slideX: Animated.Value;
+  isLocked: boolean;
   onCancel: () => void;
-}> = ({ visible, duration, slideX, onCancel }) => {
+  onSend: () => void;
+}> = ({ visible, duration, slideX, isLocked, onCancel, onSend }) => {
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -2188,6 +2997,30 @@ const AudioRecordingOverlay: React.FC<{
   }, [visible]);
 
   if (!visible) return null;
+
+  // ── Залоченный режим: кнопки Отмена / Отправить ──────────────────────────
+  if (isLocked) {
+    return (
+      <View style={[recS.overlay, recS.overlayLocked]} pointerEvents="box-none">
+        <TouchableOpacity style={recS.lockedCancel} onPress={onCancel} activeOpacity={0.8}>
+          <Icon name="trash-2" size={16} color="#ff453a" />
+        </TouchableOpacity>
+        <View style={recS.left}>
+          <View style={recS.dotWrap}>
+            <Animated.View style={[recS.dotRipple, { transform: [{ scale: pulseAnim }] }]} />
+            <View style={recS.redDot} />
+          </View>
+          <Text style={recS.timer}>{formatDuration(duration)}</Text>
+        </View>
+        <View style={recS.lockedLock}>
+          <Icon name="lock" size={14} color={colors.accent} />
+          <Text style={recS.lockedLockText}>Заперто</Text>
+        </View>
+      </View>
+    );
+  }
+
+  // ── Обычный режим: зажата кнопка ─────────────────────────────────────────
   const cancelOpacity = slideX.interpolate({ inputRange: [-80, 0], outputRange: [1, 0.4], extrapolate: "clamp" });
   const arrowOpacity  = slideX.interpolate({ inputRange: [-80, 0], outputRange: [0.3, 1], extrapolate: "clamp" });
 
@@ -2204,6 +3037,10 @@ const AudioRecordingOverlay: React.FC<{
         <Icon name="chevron-left" size={16} color={colors.primary + "50"} style={{ marginLeft: -8 }} />
         <Text style={recS.slideText}>Сдвиньте для отмены</Text>
       </Animated.View>
+      <Animated.View style={[recS.slideHint, recS.lockHint, { opacity: arrowOpacity }]}>
+        <Icon name="chevron-up" size={13} color={colors.primary + "40"} />
+        <Text style={recS.lockText}>Зафикс.</Text>
+      </Animated.View>
       <Animated.Text style={[recS.cancelLabel, { opacity: cancelOpacity }]} onPress={onCancel}>
         Отмена
       </Animated.Text>
@@ -2212,18 +3049,30 @@ const AudioRecordingOverlay: React.FC<{
 };
 const recS = StyleSheet.create({
   overlay: {
-    position: "absolute", left: 0, right: 52, top: 0, bottom: 0,
-    flexDirection: "row", alignItems: "center", paddingHorizontal: 16,
-    backgroundColor: colors.background, zIndex: 10,
+    // Абсолютный — покрывает весь inputBar (скрепка + inputWrap)
+    // right: 44 — оставляем место для кнопки микрофона справа (она поверх через zIndex)
+    position: "absolute", left: 0, right: 44, top: 0, bottom: 0,
+    flexDirection: "row", alignItems: "center", paddingHorizontal: 12,
+    backgroundColor: colors.background, zIndex: 10, gap: 4,
   },
+  overlayLocked: { right: 0, paddingHorizontal: 14, gap: 8 },
   left: { flexDirection: "row", alignItems: "center", gap: 8 },
   dotWrap: { width: 20, height: 20, alignItems: "center", justifyContent: "center" },
   dotRipple: { position: "absolute", width: 20, height: 20, borderRadius: 10, backgroundColor: "#ff453a44" },
   redDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#ff453a" },
-  timer: { fontSize: 16, fontWeight: "600", color: colors.text, fontVariant: ["tabular-nums"] },
+  timer: { fontSize: 15, fontWeight: "600", color: colors.text, fontVariant: ["tabular-nums"] },
   slideHint: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 2 },
-  slideText: { fontSize: 13, color: colors.primary + "60" },
-  cancelLabel: { fontSize: 14, fontWeight: "600", color: "#ff453a" },
+  slideText: { fontSize: 12, color: colors.primary + "60" },
+  lockHint:  { flex: 0, flexDirection: "column", alignItems: "center", gap: 1, marginRight: 2 },
+  lockText:  { fontSize: 10, color: colors.primary + "40" },
+  cancelLabel: { fontSize: 13, fontWeight: "600", color: "#ff453a" },
+  // Залоченный режим
+  lockedCancel: {
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: "#ff453a18", alignItems: "center", justifyContent: "center",
+  },
+  lockedLock: { flexDirection: "row", alignItems: "center", gap: 4, marginLeft: "auto" as any },
+  lockedLockText: { fontSize: 12, color: colors.accent, fontWeight: "600" },
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2256,62 +3105,88 @@ const CircleModalUI: React.FC<{
   onCancel: () => void;
   onStart: () => void;
   onStop: () => void;
-}> = ({ scaleAnim, isRecording, duration, hasPermission, cameraSlot, showFlipBtn, onFlip, onCancel, onStart, onStop }) => (
-  <View style={crS.backdrop}>
-    <Animated.View style={[crS.container, { transform: [{ scale: scaleAnim }] }]}>
-      <View style={crS.ringOuter}>
-        <View style={[crS.circle, { width: CIRCLE_SIZE, height: CIRCLE_SIZE, borderRadius: CIRCLE_SIZE / 2 }]}>
-          {cameraSlot}
-        </View>
-        {isRecording && <View style={[crS.progressRing, { borderColor: colors.accent }]} />}
-      </View>
+}> = ({ scaleAnim, isRecording, duration, hasPermission, cameraSlot, showFlipBtn, onFlip, onCancel, onStart, onStop }) => {
+  // Пульсация кольца при записи
+  const ringPulse = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!isRecording) { ringPulse.setValue(1); return; }
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(ringPulse, { toValue: 1.04, duration: 700, useNativeDriver: true }),
+      Animated.timing(ringPulse, { toValue: 1,    duration: 700, useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [isRecording]);
 
-      {isRecording && (
-        <View style={crS.timerOverlay}>
-          <Text style={crS.durationBig}>{formatDuration(duration * 1000)}</Text>
-        </View>
-      )}
+  const MAX_DURATION = 60;
+  const progress = Math.min(duration / MAX_DURATION, 1);
 
-      <View style={crS.controls}>
-        {!isRecording ? (
-          <>
-            <Text style={crS.hint}>{hasPermission ? "Нажмите для записи" : "Ожидание разрешений..."}</Text>
-            <View style={crS.btnRow}>
-              <TouchableOpacity style={crS.cancelBtn} onPress={onCancel} activeOpacity={0.8}>
-                <Icon name="x" size={22} color={colors.text} />
-              </TouchableOpacity>
-              {showFlipBtn && (
-                <TouchableOpacity style={crS.flipBtn} onPress={onFlip} activeOpacity={0.8}>
-                  <Icon name="refresh-cw" size={18} color={colors.text} />
-                </TouchableOpacity>
+  return (
+    <View style={crS.backdrop}>
+      <Animated.View style={[crS.container, { transform: [{ scale: scaleAnim }] }]}>
+
+        {/* Кружок с камерой */}
+        <Animated.View style={[crS.ringOuter, isRecording && { transform: [{ scale: ringPulse }] }]}>
+          {/* SVG-прогресс было бы лучше, но без зависимостей делаем через borderColor */}
+          <View style={[
+            crS.progressBorder,
+            isRecording && { borderColor: colors.accent },
+            !isRecording && { borderColor: colors.primary + "30" },
+          ]}>
+            <View
+              style={[crS.circle, { width: CIRCLE_SIZE, height: CIRCLE_SIZE, borderRadius: 20 }]}
+            >
+              {cameraSlot}
+              {/* Таймер поверх кружка */}
+              {isRecording && (
+                <View style={crS.timerOverlay}>
+                  <Text style={crS.durationBig}>{formatDuration(duration * 1000)}</Text>
+                </View>
               )}
-              <TouchableOpacity
-                style={[crS.recordBtn, !hasPermission && crS.recordBtnDisabled]}
-                onPress={onStart}
-                activeOpacity={0.8}
-                disabled={!hasPermission}
-              >
-                <View style={crS.recordDot} />
-              </TouchableOpacity>
             </View>
-          </>
-        ) : (
-          <>
-            <Text style={crS.hint}>Нажмите для отправки</Text>
-            <View style={crS.btnRow}>
-              <TouchableOpacity style={crS.cancelBtn} onPress={onCancel} activeOpacity={0.8}>
-                <Icon name="x" size={22} color={colors.text} />
-              </TouchableOpacity>
-              <TouchableOpacity style={crS.stopBtn} onPress={onStop} activeOpacity={0.8}>
-                <Icon name="send" size={20} color="#fff" />
-              </TouchableOpacity>
-            </View>
-          </>
-        )}
-      </View>
-    </Animated.View>
-  </View>
-);
+          </View>
+        </Animated.View>
+
+        {/* Управление */}
+        <View style={crS.controls}>
+          {!isRecording ? (
+            <>
+              <Text style={crS.hint}>{hasPermission ? "Подготовка..." : "Ожидание разрешений..."}</Text>
+              <View style={crS.btnRow}>
+                <TouchableOpacity style={crS.cancelBtn} onPress={onCancel} activeOpacity={0.8}>
+                  <Icon name="x" size={22} color={colors.text} />
+                </TouchableOpacity>
+                {showFlipBtn && (
+                  <TouchableOpacity style={crS.flipBtn} onPress={onFlip} activeOpacity={0.8}>
+                    <Icon name="refresh-cw" size={18} color={colors.text} />
+                  </TouchableOpacity>
+                )}
+              </View>
+            </>
+          ) : (
+            <>
+              <Text style={crS.hint}>Остановить и отправить</Text>
+              <View style={crS.btnRow}>
+                <TouchableOpacity style={crS.cancelBtn} onPress={onCancel} activeOpacity={0.8}>
+                  <Icon name="trash-2" size={20} color="#ff453a" />
+                </TouchableOpacity>
+                {showFlipBtn && (
+                  <TouchableOpacity style={crS.flipBtn} onPress={onFlip} activeOpacity={0.8}>
+                    <Icon name="refresh-cw" size={18} color={colors.text} />
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity style={crS.stopBtn} onPress={onStop} activeOpacity={0.8}>
+                  <Icon name="send" size={20} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
+        </View>
+
+      </Animated.View>
+    </View>
+  );
+};
 
 // ─── VisionCamera версия (хуки вызываются безусловно внутри компонента) ──────
 const CircleRecordModalVC: React.FC<CircleModalProps> = ({ visible, onClose, onSend }) => {
@@ -2329,6 +3204,7 @@ const CircleRecordModalVC: React.FC<CircleModalProps> = ({ visible, onClose, onS
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const cameraRef = useRef<any>(null);
+  const cancelledRef = useRef(false);
 
   // Хуки VisionCamera — вызываются безусловно, это нормально
   const device = useCameraDevice(useFrontCamera ? "front" : "back");
@@ -2338,12 +3214,15 @@ const CircleRecordModalVC: React.FC<CircleModalProps> = ({ visible, onClose, onS
 
   useEffect(() => {
     if (!visible) return;
+    cancelledRef.current = false;
     (async () => {
       if (!hasPermission) {
         await requestPermission();
         if (Platform.OS === "android") await requestCameraPermission();
       }
       Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, tension: 80, friction: 10 }).start();
+      // Небольшая задержка чтобы камера успела инициализироваться
+      setTimeout(() => { handleStart(); }, 600);
     })();
   }, [visible]);
 
@@ -2357,6 +3236,7 @@ const CircleRecordModalVC: React.FC<CircleModalProps> = ({ visible, onClose, onS
   }, [visible]);
 
   const handleCancel = useCallback(async () => {
+    cancelledRef.current = true;
     if (timerRef.current) clearInterval(timerRef.current);
     if (isRecording && cameraRef.current) {
       try { await cameraRef.current.stopRecording(); } catch (_) {}
@@ -2368,6 +3248,7 @@ const CircleRecordModalVC: React.FC<CircleModalProps> = ({ visible, onClose, onS
 
   const handleStart = useCallback(() => {
     if (!hasPermission || !cameraRef.current) return;
+    if (isRecording) return; // уже идёт
     setIsRecording(true);
     setDuration(0);
     timerRef.current = setInterval(() => {
@@ -2382,9 +3263,10 @@ const CircleRecordModalVC: React.FC<CircleModalProps> = ({ visible, onClose, onS
         onRecordingFinished: (video: any) => {
           if (timerRef.current) clearInterval(timerRef.current);
           setIsRecording(false);
+          if (cancelledRef.current) { return; }
           const uri = video.path.startsWith("file://") ? video.path : `file://${video.path}`;
           if (!video.duration || video.duration < 0.5) { onClose(); return; }
-          onSend({ uri, name: `circle_${Date.now()}.mp4`, type: "video/mp4", mediaType: "VIDEO", size: 0 });
+          onSend({ uri, name: `circle_${Date.now()}.mp4`, type: "video/mp4", mediaType: "VIDEO_NOTE" as any, size: 0 });
           onClose();
         },
         onRecordingError: () => {
@@ -2412,7 +3294,7 @@ const CircleRecordModalVC: React.FC<CircleModalProps> = ({ visible, onClose, onS
   if (!visible) return null;
 
   return (
-    <Modal transparent animationType="fade" visible={visible} onRequestClose={handleCancel}>
+    <Modal transparent animationType="fade" visible={visible} onRequestClose={handleCancel} statusBarTranslucent>
       <CircleModalUI
         scaleAnim={scaleAnim}
         isRecording={isRecording}
@@ -2425,14 +3307,26 @@ const CircleRecordModalVC: React.FC<CircleModalProps> = ({ visible, onClose, onS
         onStop={handleStop}
         cameraSlot={
           device && hasPermission ? (
-            <Camera
-              ref={cameraRef}
-              style={crS.cameraFill}
-              device={device}
-              isActive={visible}
-              video
-              audio
-            />
+            <View style={{ width: CIRCLE_SIZE, height: CIRCLE_SIZE, borderRadius: 20, overflow: "hidden" }}>
+              <Camera
+                ref={cameraRef}
+                style={{
+                  position: "absolute",
+                  // Камера пишет 16:9 — чтобы превью выглядело как кружок,
+                  // делаем view шире/выше чем нужно и центрируем
+                  width: CIRCLE_SIZE,
+                  height: CIRCLE_SIZE,
+                  top: 0,
+                  left: 0,
+                }}
+                device={device}
+                isActive={visible}
+                video
+                audio
+                // Низкое разрешение = меньше файл, быстрее загрузка
+                videoQualityPreset="medium"
+              />
+            </View>
           ) : (
             <View style={crS.innerCircle}>
               <Icon name="video" size={48} color={colors.text + "80"} />
@@ -2449,6 +3343,8 @@ const CircleRecordModalFallback: React.FC<CircleModalProps> = ({ visible, onClos
   const [isRecording, setIsRecording] = useState(false);
   const [duration, setDuration] = useState(0);
   const [hasPermission, setHasPermission] = useState(false);
+  const progressAnim = useRef(new Animated.Value(0)).current;
+  const progressAnimRef = useRef<Animated.CompositeAnimation | null>(null);
 
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -2456,8 +3352,12 @@ const CircleRecordModalFallback: React.FC<CircleModalProps> = ({ visible, onClos
 
   useEffect(() => {
     if (!visible) return;
-    requestCameraPermission().then(setHasPermission);
-    Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, tension: 80, friction: 10 }).start();
+    requestCameraPermission().then((granted) => {
+      setHasPermission(granted);
+      Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, tension: 80, friction: 10 }).start();
+      // Автостарт после небольшой задержки (анимация открытия)
+      if (granted) setTimeout(() => { handleStart(); }, 400);
+    });
   }, [visible]);
 
   useEffect(() => {
@@ -2465,12 +3365,16 @@ const CircleRecordModalFallback: React.FC<CircleModalProps> = ({ visible, onClos
       scaleAnim.setValue(0.8);
       setIsRecording(false);
       setDuration(0);
+      progressAnim.setValue(0);
       if (timerRef.current) clearInterval(timerRef.current);
+      progressAnimRef.current?.stop();
     }
   }, [visible]);
 
   const handleCancel = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
+    progressAnimRef.current?.stop();
+    progressAnim.setValue(0);
     setIsRecording(false);
     setDuration(0);
     onClose();
@@ -2482,10 +3386,24 @@ const CircleRecordModalFallback: React.FC<CircleModalProps> = ({ visible, onClos
       return;
     }
     setIsRecording(true);
-    timerRef.current = setInterval(() => setDuration((d) => d + 1), 1000);
+    setDuration(0);
+    progressAnim.setValue(0);
+    // Анимируем прогресс-кольцо за MAX_DURATION секунд
+    progressAnimRef.current = Animated.timing(progressAnim, {
+      toValue: 1,
+      duration: MAX_DURATION * 1000,
+      useNativeDriver: false,
+    });
+    progressAnimRef.current.start();
+    timerRef.current = setInterval(() => setDuration((d) => {
+      if (d + 1 >= MAX_DURATION) { handleStop(); }
+      return d + 1;
+    }), 1000);
     try {
+      // Запускаем системную камеру для видео — она сама управляет записью
       const r = await launchCamera({ mediaType: "video", videoQuality: "high", durationLimit: MAX_DURATION });
       if (timerRef.current) clearInterval(timerRef.current);
+      progressAnimRef.current?.stop();
       setIsRecording(false);
       if (r.didCancel) { onClose(); return; }
       const a = r.assets?.[0];
@@ -2495,19 +3413,32 @@ const CircleRecordModalFallback: React.FC<CircleModalProps> = ({ visible, onClos
         onClose();
         return;
       }
-      onSend({ uri: a.uri, name: a.fileName ?? `circle_${Date.now()}.mp4`, type: a.type ?? "video/mp4", mediaType: "VIDEO", size: a.fileSize ?? 0 });
+      onSend({ uri: a.uri, name: a.fileName ?? `circle_${Date.now()}.mp4`, type: a.type ?? "video/mp4", mediaType: "VIDEO_NOTE" as any, size: a.fileSize ?? 0 });
       onClose();
     } catch (_) {
       if (timerRef.current) clearInterval(timerRef.current);
+      progressAnimRef.current?.stop();
       setIsRecording(false);
       onClose();
     }
   }, [hasPermission, onClose, onSend]);
 
+  const handleStop = useCallback(() => {
+    // Для fallback-режима через launchCamera остановка происходит нажатием кнопки в системной камере.
+    // Эта кнопка нужна для UX — подсказывает что надо остановить в системной камере.
+    if (timerRef.current) clearInterval(timerRef.current);
+    progressAnimRef.current?.stop();
+  }, []);
+
   if (!visible) return null;
 
+  const progressDeg = progressAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
+  });
+
   return (
-    <Modal transparent animationType="fade" visible={visible} onRequestClose={handleCancel}>
+    <Modal transparent animationType="fade" visible={visible} onRequestClose={handleCancel} statusBarTranslucent>
       <CircleModalUI
         scaleAnim={scaleAnim}
         isRecording={isRecording}
@@ -2516,7 +3447,7 @@ const CircleRecordModalFallback: React.FC<CircleModalProps> = ({ visible, onClos
         showFlipBtn={false}
         onCancel={handleCancel}
         onStart={handleStart}
-        onStop={handleCancel} // fallback — системная камера сама останавливается
+        onStop={handleStop}
         cameraSlot={
           <View style={crS.innerCircle}>
             <Icon name="video" size={48} color={colors.text + "80"} />
@@ -2536,70 +3467,72 @@ const CircleRecordModal: React.FC<CircleModalProps> = (props) => {
   return <CircleRecordModalFallback {...props} />;
 };
 const crS = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.90)", justifyContent: "center", alignItems: "center" },
-  container: { alignItems: "center", gap: 32 },
-  ringOuter: {
-    padding: 4, borderRadius: 999,
-    borderWidth: 3, borderColor: colors.accent,
-    position: "relative",
-  },
-  progressRing: {
-    position: "absolute",
-    top: 0, left: 0, right: 0, bottom: 0,
-    borderRadius: 999,
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.92)", justifyContent: "center", alignItems: "center" },
+  container: { alignItems: "center", gap: 36 },
+  ringOuter: { alignItems: "center", justifyContent: "center" },
+  progressBorder: {
+    padding: 4,
+    borderRadius: 24,
     borderWidth: 3,
+    borderColor: colors.accent,
+    overflow: "hidden",
   },
   circle: {
-    backgroundColor: colors.secondary + "40",
     overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 2,
-    borderColor: colors.primary + "20",
+    backgroundColor: "rgba(0,0,0,0.85)",
+    borderRadius: 20,
   },
   cameraFill: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
-  innerCircle: { alignItems: "center", gap: 12 },
+  cameraClip: { overflow: "hidden", position: "absolute", top: 0, left: 0 },
+  innerCircle: { alignItems: "center", justifyContent: "center", flex: 1, gap: 12 },
   timerOverlay: {
     position: "absolute",
-    bottom: 16,
+    bottom: 14,
     alignSelf: "center",
-    backgroundColor: "rgba(0,0,0,0.55)",
+    backgroundColor: "rgba(0,0,0,0.60)",
     borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
   },
-  durationBig: { fontSize: 20, fontWeight: "700", color: colors.text, fontVariant: ["tabular-nums"] },
-  controls: { alignItems: "center", gap: 16 },
-  hint: { fontSize: 14, color: colors.primary + "80", textAlign: "center" },
-  btnRow: { flexDirection: "row", gap: 20, alignItems: "center" },
+  durationBig: { fontSize: 18, fontWeight: "700", color: "#fff", fontVariant: ["tabular-nums"] },
+  controls: { alignItems: "center", gap: 14 },
+  hint: { fontSize: 14, color: colors.primary + "90", textAlign: "center" },
+  btnRow: { flexDirection: "row", gap: 22, alignItems: "center" },
   cancelBtn: {
-    width: 52, height: 52, borderRadius: 26,
+    width: 54, height: 54, borderRadius: 27,
     backgroundColor: colors.secondary + "60", borderWidth: 1, borderColor: colors.primary + "20",
     alignItems: "center", justifyContent: "center",
   },
   flipBtn: {
-    width: 44, height: 44, borderRadius: 22,
+    width: 46, height: 46, borderRadius: 23,
     backgroundColor: colors.secondary + "50", borderWidth: 1, borderColor: colors.primary + "20",
     alignItems: "center", justifyContent: "center",
   },
   recordBtn: {
-    width: 68, height: 68, borderRadius: 34, backgroundColor: "#ff453a",
+    width: 72, height: 72, borderRadius: 36, backgroundColor: "#ff453a",
     alignItems: "center", justifyContent: "center",
     shadowColor: "#ff453a", shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5, shadowRadius: 12, elevation: 8,
+    shadowOpacity: 0.55, shadowRadius: 14, elevation: 10,
   },
-  recordBtnDisabled: { backgroundColor: "#ff453a60" },
-  recordDot: { width: 26, height: 26, borderRadius: 13, backgroundColor: "#fff" },
+  recordBtnDisabled: { backgroundColor: "#ff453a55", shadowOpacity: 0, elevation: 0 },
+  recordDot: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#fff" },
   stopBtn: {
-    width: 68, height: 68, borderRadius: 34, backgroundColor: colors.accent,
+    width: 72, height: 72, borderRadius: 36, backgroundColor: colors.accent,
     alignItems: "center", justifyContent: "center",
     shadowColor: colors.accent, shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5, shadowRadius: 12, elevation: 8,
+    shadowOpacity: 0.55, shadowRadius: 14, elevation: 10,
   },
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
 // RightActionButton
+// ══════════════════════════════════════════════════════════════════════════════
+// Telegram-style:
+//   • audio-режим: зажал → запись, потянул влево → отмена, потянул вверх → лок
+//   • circle-режим: тап → открыть модал записи кружка
+//   • короткий тап в audio-режиме: переключить audio ↔ circle
 // ══════════════════════════════════════════════════════════════════════════════
 interface RightBtnProps {
   mode: "send" | "mic";
@@ -2607,61 +3540,164 @@ interface RightBtnProps {
   uploading: boolean;
   onSend: () => void;
   onMicPress: () => void;
-  onMicLongPressIn: () => void;
-  onMicLongPressOut: () => void;
+  onMicLongPressIn: (forCircle?: boolean) => void;
+  onOpenCircle: () => void;
+  onMicLongPressOut: (cancelled: boolean, locked: boolean) => void;
+  onMicLock: () => void;
   slideX: Animated.Value;
+  isRecording: boolean;
+  isLocked: boolean;
 }
+
+const CANCEL_THRESHOLD = -80;  // px влево → отмена
+const LOCK_THRESHOLD   = -60;  // px вверх → лок
 
 const RightActionButton: React.FC<RightBtnProps> = ({
   mode, micSubMode, uploading, onSend,
-  onMicPress, onMicLongPressIn, onMicLongPressOut, slideX,
+  onMicPress, onMicLongPressIn, onOpenCircle, onMicLongPressOut, onMicLock,
+  slideX, isRecording, isLocked,
 }) => {
-  const scaleAnim = useRef(new Animated.Value(1)).current;
-  const prevKey = useRef(`${mode}-${micSubMode}`);
+  const scaleAnim    = useRef(new Animated.Value(1)).current;
+  const rippleAnim   = useRef(new Animated.Value(0)).current;
+  const btnScaleAnim = useRef(new Animated.Value(1)).current;
+  const prevKey      = useRef(`${mode}-${micSubMode}`);
 
-  const animateSwitch = useCallback(() => {
-    Animated.sequence([
-      Animated.timing(scaleAnim, { toValue: 0.65, duration: 75, useNativeDriver: true }),
-      Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, tension: 220, friction: 8 }),
-    ]).start();
-  }, [scaleAnim]);
-
+  // Анимация смены иконки
   useEffect(() => {
     const key = `${mode}-${micSubMode}`;
     if (prevKey.current !== key) {
       prevKey.current = key;
-      animateSwitch();
+      Animated.sequence([
+        Animated.timing(scaleAnim, { toValue: 0.65, duration: 75, useNativeDriver: true }),
+        Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, tension: 220, friction: 8 }),
+      ]).start();
     }
   }, [mode, micSubMode]);
 
-  const rippleAnim = useRef(new Animated.Value(0)).current;
+  // Разрастание кнопки при записи
+  useEffect(() => {
+    Animated.spring(btnScaleAnim, {
+      toValue: isRecording ? 1.25 : 1,
+      useNativeDriver: true,
+      tension: 120,
+      friction: 8,
+    }).start();
+  }, [isRecording]);
+
+  // Ref чтобы PanResponder видел актуальные значения без пересоздания
+  const modeRef         = useRef(mode);
+  const micSubModeRef   = useRef(micSubMode);
+  const isLockedRef     = useRef(isLocked);
+  const onOpenCircleRef = useRef(onOpenCircle);
+  const onMicPressRef   = useRef(onMicPress);
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+  useEffect(() => { micSubModeRef.current = micSubMode; }, [micSubMode]);
+  useEffect(() => { isLockedRef.current = isLocked; }, [isLocked]);
+  useEffect(() => { onOpenCircleRef.current = onOpenCircle; }, [onOpenCircle]);
+  useEffect(() => { onMicPressRef.current = onMicPress; }, [onMicPress]);
+
+  const pressStartTime   = useRef(0);
+  const gestureActive    = useRef(false);
+  const lockedRef        = useRef(false);
+  const recordingStarted = useRef(false);
+  const holdTimerRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const HOLD_DELAY = 600; // мс удержания для запуска записи
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => mode === "mic",
-      onMoveShouldSetPanResponder: () => mode === "mic",
+      onStartShouldSetPanResponder:        () => modeRef.current === "mic",
+      onStartShouldSetPanResponderCapture: () => modeRef.current === "mic",
+      onMoveShouldSetPanResponder:         () => modeRef.current === "mic" && recordingStarted.current,
+      onMoveShouldSetPanResponderCapture:  () => modeRef.current === "mic" && recordingStarted.current,
+
       onPanResponderGrant: () => {
-        onMicLongPressIn();
-        Animated.timing(rippleAnim, { toValue: 1, duration: 300, useNativeDriver: false }).start();
+        pressStartTime.current   = Date.now();
+        gestureActive.current    = true;
+        lockedRef.current        = false;
+        recordingStarted.current = false;
+
+        // Через HOLD_DELAY — запускаем запись или открываем кружок
+        holdTimerRef.current = setTimeout(() => {
+          if (!gestureActive.current) return;
+          recordingStarted.current = true;
+
+          if (micSubModeRef.current === "circle") {
+            // Зажали в circle-режиме → открыть модал кружка
+            onOpenCircleRef.current();
+          } else {
+            // Зажали в audio-режиме → начать запись голосового
+            onMicLongPressIn();
+            Animated.spring(rippleAnim, { toValue: 1, useNativeDriver: false, tension: 80, friction: 10 }).start();
+          }
+        }, HOLD_DELAY);
       },
+
       onPanResponderMove: (_, gs) => {
-        if (gs.dx < 0) slideX.setValue(Math.max(gs.dx, -120));
+        if (!recordingStarted.current) return;
+        if (micSubModeRef.current === "circle") return;
+        if (lockedRef.current) return;
+
+        if (gs.dx < 0) slideX.setValue(Math.max(gs.dx, -140));
+
+        if (gs.dy < LOCK_THRESHOLD && !lockedRef.current) {
+          lockedRef.current = true;
+          slideX.setValue(0);
+          Animated.timing(rippleAnim, { toValue: 0, duration: 150, useNativeDriver: false }).start();
+          onMicLock();
+        }
       },
-      onPanResponderRelease: () => {
-        Animated.timing(rippleAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start();
+
+      onPanResponderRelease: (_, gs) => {
+        if (!gestureActive.current) return;
+        gestureActive.current = false;
+
+        if (holdTimerRef.current) {
+          clearTimeout(holdTimerRef.current);
+          holdTimerRef.current = null;
+        }
+
+        Animated.timing(rippleAnim, { toValue: 0, duration: 150, useNativeDriver: false }).start();
+
+        if (!recordingStarted.current) {
+          // Палец отпущен до HOLD_DELAY — это просто тап → переключить режим
+          slideX.setValue(0);
+          onMicPressRef.current();
+          return;
+        }
+
+        // Запись была запущена
+        if (micSubModeRef.current === "circle") return; // модал сам управляет собой
+
+        if (lockedRef.current) return; // залочено — управляет оверлей
+
+        const cancelled = gs.dx < CANCEL_THRESHOLD;
         slideX.setValue(0);
-        onMicLongPressOut();
+        onMicLongPressOut(cancelled, false);
       },
+
       onPanResponderTerminate: () => {
+        if (!gestureActive.current) return;
+        gestureActive.current = false;
+
+        if (holdTimerRef.current) {
+          clearTimeout(holdTimerRef.current);
+          holdTimerRef.current = null;
+        }
+
         rippleAnim.setValue(0);
         slideX.setValue(0);
-        onMicLongPressOut();
+
+        if (recordingStarted.current && micSubModeRef.current !== "circle" && !lockedRef.current) {
+          onMicLongPressOut(true, false);
+        }
+        recordingStarted.current = false;
       },
     })
   ).current;
 
-  const rippleSize = rippleAnim.interpolate({ inputRange: [0, 1], outputRange: [36, 60] });
-  const rippleOpacity = rippleAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.35] });
+  const rippleSize    = rippleAnim.interpolate({ inputRange: [0, 1], outputRange: [36, 64] });
+  const rippleOpacity = rippleAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.28] });
 
   if (uploading) {
     return (
@@ -2681,24 +3717,28 @@ const RightActionButton: React.FC<RightBtnProps> = ({
     );
   }
 
-  const iconName = micSubMode === "audio" ? "mic" : "video";
-  const btnColor = micSubMode === "audio" ? colors.secondary + "60" : colors.accent + "30";
-  const iconColor = micSubMode === "audio" ? colors.text : colors.accent;
+  const iconName    = micSubMode === "audio" ? "mic" : "video";
+  const btnColor    = micSubMode === "audio" ? colors.secondary + "60" : colors.accent + "30";
+  const iconColor   = micSubMode === "audio" ? colors.text : colors.accent;
   const borderColor = micSubMode === "audio" ? colors.primary + "25" : colors.accent + "60";
 
   return (
-    <Animated.View style={[rbS.micWrap, { transform: [{ scale: scaleAnim }] }]} {...panResponder.panHandlers}>
+    <Animated.View
+      style={[rbS.micWrap, { transform: [{ scale: Animated.multiply(scaleAnim, btnScaleAnim) }] }]}
+      {...panResponder.panHandlers}
+    >
+      {/* Пульсирующий ореол при записи */}
       <Animated.View
-        style={[rbS.ripple, { width: rippleSize, height: rippleSize, borderRadius: 36, opacity: rippleOpacity, backgroundColor: colors.accent }]}
+        style={[rbS.ripple, {
+          width: rippleSize, height: rippleSize,
+          borderRadius: 40, opacity: rippleOpacity,
+          backgroundColor: micSubMode === "audio" ? "#ff453a" : colors.accent,
+        }]}
         pointerEvents="none"
       />
-      <TouchableOpacity
-        style={[rbS.btn, rbS.micBtn, { backgroundColor: btnColor, borderColor }]}
-        onPress={onMicPress}
-        activeOpacity={0.85}
-      >
-        <Icon name={iconName} size={17} color={iconColor} />
-      </TouchableOpacity>
+      <Animated.View style={[rbS.btn, rbS.micBtn, { backgroundColor: btnColor, borderColor }]}>
+        <Icon name={iconName} size={17} color={isRecording && micSubMode === "audio" ? "#ff453a" : iconColor} />
+      </Animated.View>
     </Animated.View>
   );
 };
@@ -2706,12 +3746,15 @@ const rbS = StyleSheet.create({
   btn: {
     width: 36, height: 36, borderRadius: 18, backgroundColor: colors.accent,
     alignItems: "center", justifyContent: "center",
-    shadowColor: colors.accent, shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.28, shadowRadius: 6, elevation: 5,
+    shadowColor: colors.accent, shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25, shadowRadius: 4, elevation: 4,
   },
-  micBtn: { backgroundColor: colors.secondary + "60", borderWidth: 1.5, borderColor: colors.primary + "25", shadowOpacity: 0, elevation: 0 },
+  micBtn: {
+    backgroundColor: colors.secondary + "60", borderWidth: 1.5,
+    borderColor: colors.primary + "25", shadowOpacity: 0, elevation: 0,
+  },
   micWrap: { position: "relative", alignItems: "center", justifyContent: "center" },
-  ripple: { position: "absolute", backgroundColor: colors.accent },
+  ripple:  { position: "absolute", backgroundColor: colors.accent },
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2802,18 +3845,16 @@ const ChatScreen: React.FC = () => {
 
   // ── Audio recording state ──────────────────────────────────────────────────
   const [isAudioRecording, setIsAudioRecording] = useState(false);
+  const [isRecordingLocked, setIsRecordingLocked] = useState(false);
+  const isLockedRef = useRef(false); // ref-зеркало isRecordingLocked для использования в замыканиях
   const [audioDuration, setAudioDuration] = useState(0);
   const [circleModalVisible, setCircleModalVisible] = useState(false);
   const [micSubMode, setMicSubMode] = useState<"audio" | "circle">("audio");
   const audioSlideX = useRef(new Animated.Value(0)).current;
   const longPressActive = useRef(false);
-  // Отдельный ref для duration interval — без хаков
   const audioDurationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioRecordingCancelledRef = useRef(false);
   const audioRecordStartTimeRef = useRef(0);
-  // Ленивое создание инстанса — ТОЛЬКО внутри компонента, не на уровне модуля.
-  // New Architecture требует чтобы нативные модули инициализировались после маунта.
-  // react-native-audio-record не требует инстанса — это статический модуль
 
   const scrollOffsetRef = useRef(_scrollOffsetCache.get(chatId) ?? 0);
 
@@ -2896,8 +3937,12 @@ const ChatScreen: React.FC = () => {
 
   // ── Mic toggle (tap) ───────────────────────────────────────────────────────
   const handleMicPress = useCallback(() => {
-    if (longPressActive.current) return;
     setMicSubMode((prev) => (prev === "audio" ? "circle" : "audio"));
+  }, []);
+
+  const handleMicLock = useCallback(() => {
+    setIsRecordingLocked(true);
+    isLockedRef.current = true;
   }, []);
 
   // ── Audio recording (react-native-audio-recorder-player) ──────────────────
@@ -2963,6 +4008,8 @@ const ChatScreen: React.FC = () => {
       const filePath: string = await AudioRecord.stop();
       setIsAudioRecording(false);
       setAudioDuration(0);
+      setIsRecordingLocked(false);
+      isLockedRef.current = false;
 
       if (cancel || audioRecordingCancelledRef.current) {
         audioRecordingCancelledRef.current = false;
@@ -2984,36 +4031,44 @@ const ChatScreen: React.FC = () => {
     }
   }, [handleMediaPick]);
 
-  const handleMicLongPressIn = useCallback(() => {
-    longPressActive.current = true;
-    if (micSubMode === "audio") {
-      startAudioRecording();
-    } else {
+  const handleMicLongPressIn = useCallback((forCircle?: boolean) => {
+    if (forCircle || micSubMode === "circle") {
       setCircleModalVisible(true);
+      return;
     }
+    longPressActive.current = true;
+    setIsRecordingLocked(false);
+    isLockedRef.current = false;
+    startAudioRecording();
   }, [micSubMode, startAudioRecording]);
 
-  const handleMicLongPressOut = useCallback(() => {
+  const handleMicLongPressOut = useCallback((cancelled: boolean, _locked: boolean) => {
     if (!longPressActive.current) return;
     longPressActive.current = false;
 
-    if (micSubMode === "circle") {
-      audioSlideX.setValue(0);
-      return;
-    }
+    // Залочено — пользователь отпустил палец, запись продолжается
+    // её остановит кнопка отправки/отмены в AudioRecordingOverlay
+    if (isLockedRef.current) return;
 
-    // Проверяем насколько далеко сдвинул пользователь для отмены
-    const xVal: number = (audioSlideX as any)._value ?? 0;
-    const cancelled = xVal < -60;
     if (cancelled) audioRecordingCancelledRef.current = true;
     stopAudioRecording(cancelled);
     audioSlideX.setValue(0);
-  }, [micSubMode, stopAudioRecording, audioSlideX]);
+  }, [stopAudioRecording, audioSlideX]);
 
   const handleCancelRecording = useCallback(() => {
     audioRecordingCancelledRef.current = true;
     longPressActive.current = false;
+    setIsRecordingLocked(false);
+    isLockedRef.current = false;
     stopAudioRecording(true);
+    audioSlideX.setValue(0);
+  }, [stopAudioRecording, audioSlideX]);
+
+  const handleSendLocked = useCallback(() => {
+    longPressActive.current = false;
+    setIsRecordingLocked(false);
+    isLockedRef.current = false;
+    stopAudioRecording(false);
     audioSlideX.setValue(0);
   }, [stopAudioRecording, audioSlideX]);
 
@@ -3240,6 +4295,8 @@ const ChatScreen: React.FC = () => {
           <PinnedBanner pinnedMessages={pinnedMessages} activeIndex={pinActiveIndex} onPress={handlePinnedBannerPress} />
         )}
 
+        <OfflineBanner />
+
         <KeyboardAvoidingView
           style={{ flex: 1, paddingBottom: Platform.OS === "android" ? keyboardHeight : 0 }}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -3258,7 +4315,7 @@ const ChatScreen: React.FC = () => {
               windowSize={10}
               maxToRenderPerBatch={10}
               initialNumToRender={20}
-              removeClippedSubviews={Platform.OS === "android"}
+              removeClippedSubviews={false}
               viewabilityConfig={viewabilityConfig}
               onViewableItemsChanged={onViewableItemsChanged}
               onScroll={(e) => {
@@ -3337,37 +4394,50 @@ const ChatScreen: React.FC = () => {
                 </TouchableOpacity>
 
                 <View style={s.inputWrap}>
-                  {isAudioRecording ? (
-                    <AudioRecordingOverlay
-                      visible={isAudioRecording}
-                      duration={audioDuration}
-                      slideX={audioSlideX}
-                      onCancel={handleCancelRecording}
-                    />
-                  ) : (
-                    <TextInput
-                      value={inputText}
-                      onChangeText={handleTextChange}
-                      style={s.input}
-                      placeholder={editTarget ? "Редактировать..." : "Сообщение..."}
-                      placeholderTextColor={colors.primary + "50"}
-                      multiline
-                      maxLength={2_000}
-                    />
-                  )}
+                  <TextInput
+                    value={inputText}
+                    onChangeText={handleTextChange}
+                    style={s.input}
+                    placeholder={editTarget ? "Редактировать..." : "Сообщение..."}
+                    placeholderTextColor={colors.primary + "50"}
+                    multiline
+                    maxLength={2_000}
+                  />
                 </View>
 
-                <RightActionButton
-                  mode={inputMode}
-                  micSubMode={micSubMode}
-                  uploading={uploading}
-                  onSend={handleSend}
-                  onMicPress={handleMicPress}
-                  onMicLongPressIn={handleMicLongPressIn}
-                  onMicLongPressOut={handleMicLongPressOut}
-                  slideX={audioSlideX}
-                />
+                {isRecordingLocked ? (
+                  // Залочено — показываем кнопку отправки
+                  <TouchableOpacity style={s.sendLockedBtn} onPress={handleSendLocked} activeOpacity={0.85}>
+                    <Icon name="send" size={15} color={colors.text} />
+                  </TouchableOpacity>
+                ) : (
+                  <RightActionButton
+                    mode={inputMode}
+                    micSubMode={micSubMode}
+                    uploading={uploading}
+                    onSend={handleSend}
+                    onMicPress={handleMicPress}
+                    onMicLongPressIn={handleMicLongPressIn}
+                    onOpenCircle={() => setCircleModalVisible(true)}
+                    onMicLongPressOut={handleMicLongPressOut}
+                    onMicLock={handleMicLock}
+                    slideX={audioSlideX}
+                    isRecording={isAudioRecording}
+                    isLocked={isRecordingLocked}
+                  />
+                )}
               </>
+            )}
+            {/* Оверлей записи — поверх всего inputBar, включая скрепку */}
+            {isAudioRecording && (
+              <AudioRecordingOverlay
+                visible={isAudioRecording}
+                duration={audioDuration}
+                slideX={audioSlideX}
+                isLocked={isRecordingLocked}
+                onCancel={handleCancelRecording}
+                onSend={handleSendLocked}
+              />
             )}
           </View>
         </KeyboardAvoidingView>
@@ -3453,23 +4523,29 @@ const s = StyleSheet.create({
   msgList: { paddingVertical: 12, paddingBottom: 6 },
   inputBar: {
     flexDirection: "row", alignItems: "center",
-    paddingHorizontal: 8, paddingVertical: 6, paddingBottom: 6,
+    paddingHorizontal: 8, paddingVertical: 4, paddingBottom: Platform.OS === "ios" ? 6 : 4,
     borderTopWidth: 1, borderTopColor: colors.primary + "12",
-    backgroundColor: colors.background, gap: 6,
+    backgroundColor: colors.background, gap: 5,
   },
-  attachBtn: { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
+  attachBtn: { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
+  sendLockedBtn: {
+    width: 36, height: 36, borderRadius: 18, backgroundColor: colors.accent,
+    alignItems: "center", justifyContent: "center",
+    shadowColor: colors.accent, shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3, shadowRadius: 4, elevation: 4,
+  },
   selectActionBtn: {
     flex: 1, alignItems: "center", justifyContent: "center",
-    flexDirection: "row", gap: 6, paddingVertical: 8,
+    flexDirection: "row", gap: 6, paddingVertical: 6,
   },
   selectActionLabel: { fontSize: 15, fontWeight: "600" },
   inputWrap: {
     flex: 1, backgroundColor: colors.secondary + "30",
-    borderRadius: 20, borderWidth: 1, borderColor: colors.primary + "20",
-    paddingHorizontal: 14, paddingVertical: Platform.OS === "ios" ? 8 : 4,
-    maxHeight: 100, minHeight: 36, justifyContent: "center", overflow: "hidden",
+    borderRadius: 18, borderWidth: 1, borderColor: colors.primary + "20",
+    paddingHorizontal: 12, paddingVertical: Platform.OS === "ios" ? 6 : 2,
+    maxHeight: 90, minHeight: 32, justifyContent: "center", overflow: "hidden",
   },
-  input: { color: colors.text, fontSize: 14, lineHeight: 19 },
+  input: { color: colors.text, fontSize: 14, lineHeight: 18 },
   headerWrap: { position: "relative", overflow: "hidden", borderBottomWidth: 1, borderBottomColor: colors.primary + "15" },
   headerBanner: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   headerOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(17, 13, 22, 0.78)" },

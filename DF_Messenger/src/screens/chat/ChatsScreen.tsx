@@ -33,14 +33,18 @@ import { useUserOnlineStatus } from '../../hooks/presence.hook';
 import { Chat } from '../../api/chat.types';
 import { Friend } from '../../api/friends.types';
 import { AppStackParamList, OtherUser } from '../../navigation/types';
+import { OfflineBanner } from '../../components/OfflineBanner'
 
 type NavProp = NativeStackNavigationProp<AppStackParamList>;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const getOtherUser = (chat: Chat, myId: number): OtherUser | null => {
+  // FIX: если myId ещё не загружен (0), не пытаемся определить собеседника
+  if (!myId) return null;
   const other = chat.participants.find((p) => p.user?.id !== myId);
-  const u     = other?.user ?? chat.participants[0]?.user;
+  // FIX: убран fallback на participants[0] — он мог вернуть самого себя
+  const u = other?.user;
   if (!u?.id) return null;
   return {
     id: u.id,
@@ -436,11 +440,13 @@ const ChatsScreen = () => {
   }, [openChat, createChat]);
 
   const renderChatItem = useCallback(({ item }: { item: Chat }) => {
+    // FIX: не рендерим item пока me не загружен — иначе myId=0 и getOtherUser вернёт себя
+    if (!me?.id) return null;
     if (!item.participants?.length || !item.participants[0]?.user?.id) return null;
     return (
       <ChatItem
         chat={item}
-        myId={me?.id ?? 0}
+        myId={me.id}
         unreadCount={getUnread(item.id)}
         isTyping={isTypingInChat(item.id)}
         onPress={() => handleChatPress(item)}
@@ -482,6 +488,8 @@ const ChatsScreen = () => {
 
       {/* Мини-панель глобального плеера — показывается если аудио/голосовое играет вне чата */}
       <MiniPlayerBanner />
+
+      <OfflineBanner/>
 
       {!chats?.length ? (
         <ScrollView
