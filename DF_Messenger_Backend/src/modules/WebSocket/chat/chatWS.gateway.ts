@@ -13,8 +13,22 @@ import { MinioService } from '../../../db/minio/minio.service'
 import { ChatService } from '../../chat/chat.service'
 import { MessageType } from '@prisma/client'
 import * as mm from 'music-metadata'
+import { NotificationService } from '../../user/services/notification.service'
 
 interface JwtPayload { id: number }
+
+function _mediaTypeLabel(type: MessageType): string {
+  switch (type) {
+    case MessageType.IMAGE: return '🖼 Фото'
+    case MessageType.VIDEO: return '🎥 Видео'
+    case MessageType.VIDEO_NOTE: return '⭕ Видео-кружок'
+    case MessageType.AUDIO: return '🎤 Аудио'
+    case MessageType.VOICE: return '🎤 Голосовое сообщение'
+    case MessageType.MUSIC: return '🎵 Музыка'
+    case MessageType.FILE: return '📎 Файл'
+    default: return '📎 Медиа'
+  }
+}
 
 @WebSocketGateway({ cors: { origin: '*' } })
 export class ChatGateway implements OnGatewayConnection {
@@ -23,8 +37,37 @@ export class ChatGateway implements OnGatewayConnection {
 
   constructor(
     private chatService: ChatService,
-    private minioService: MinioService
+    private minioService: MinioService,
+    private notificationService: NotificationService
   ) {}
+
+  private async sendPushIfOffline(
+    senderId: number,
+    senderName: string,
+    participantIds: number[],
+    body: string,
+    chatId: number
+  ) {
+    console.log('[PUSH] sendPushIfOffline called, participants:', participantIds)
+    for (const participantId of participantIds) {
+      if (participantId === senderId) continue
+      
+
+      const sockets = await this.server.in(`user_${participantId}`).fetchSockets()
+      const isOnline = sockets.length > 0
+      console.log(`[PUSH] isOnline for ${participantId}:`, isOnline)
+
+      if (!isOnline) {
+        await this.notificationService.sendPushToUser(
+          participantId,
+          senderName,
+          body,
+          { chatId: String(chatId) }
+        )
+      }
+    }
+    
+  }
 
   handleConnection(socket: Socket) {
     try {
@@ -103,6 +146,14 @@ export class ChatGateway implements OnGatewayConnection {
         this.server.to(`user_${participantId}`).emit('new_chat', { chatId: data.chatId })
       }
     }
+
+    await this.sendPushIfOffline(
+      userId,
+      message.sender.nickName,
+      participants,
+      message.content ?? '📎 Медиа',
+      data.chatId
+    )
 
     return message
   }
@@ -263,9 +314,7 @@ export class ChatGateway implements OnGatewayConnection {
           chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
         }
         const fileBuffer = Buffer.concat(chunks)
-        console.log('[MUSIC] fileBuffer size:', fileBuffer.length)
         const metadata = await mm.parseBuffer(fileBuffer)
-        console.log('[MUSIC] ID3 tags:', metadata.common)
         
         musicTitle = metadata.common.title ?? undefined
         musicArtist = metadata.common.artist ?? undefined
@@ -280,11 +329,9 @@ export class ChatGateway implements OnGatewayConnection {
         console.error('Ошибка чтения ID3 тегов:', e)
       }
 
-      console.log('[MUSIC] after ID3 - musicTitle:', musicTitle, 'key:', data.key)
 
       if (!musicTitle) {
         const filename = data.key.split('/').pop()?.replace(/\.[^/.]+$/, '') ?? ''
-        console.log('[MUSIC] fallback filename:', filename)
         const cleanName = filename.replace(/^[a-f0-9-]{36}-/, '')
         if (cleanName.includes(' - ')) {
           const parts = cleanName.split(' - ')
@@ -294,7 +341,6 @@ export class ChatGateway implements OnGatewayConnection {
           musicTitle = cleanName
         }
       }
-      console.log('[MUSIC] final - musicTitle:', musicTitle, 'musicArtist:', musicArtist)
     }
 
     const message = await this.chatService.sendMessage(
@@ -325,6 +371,14 @@ export class ChatGateway implements OnGatewayConnection {
         this.server.to(`user_${participantId}`).emit('new_chat', { chatId: data.chatId })
       }
     }
+
+    await this.sendPushIfOffline(
+      userId,
+      message.sender.nickName,
+      participants,
+      _mediaTypeLabel(message.type),
+      data.chatId
+    )
 
     return messageWithUrls
   }

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "233818647923",
+    "project_id": "df-messenger-34684",
+    "storage_bucket": "df-messenger-34684.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:233818647923:android:804a4016aeb67e6027e906",
+        "android_client_info": {
+          "package_name": "com.df_messenger"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyByWYYPvMlkG19h3EqBMvy6Z7MRErnb1WY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -55,14 +55,22 @@ export class FriendRepository {
 		if(block) throw new ForbiddenException('Действие недоступно (вы или вас заблокировали)')
 
 		const existing = await this.prisma.friendship.findFirst({
-			where: {
-				OR: [
-					{senderId: senderId, receiverId: receiverId},
-					{senderId: receiverId, receiverId: senderId}
-				]
-			}
-		})
-		if(existing) throw new ConflictException('Запрос на отправление в друзья');
+		where: {
+			OR: [
+				{senderId: senderId, receiverId: receiverId},
+				{senderId: receiverId, receiverId: senderId}
+			]
+		}
+	})
+
+	if (existing) {
+		if (existing.status === 'DECLINED') {
+
+			await this.prisma.friendship.delete({ where: { id: existing.id } })
+		} else {
+			throw new ConflictException('Запрос уже существует')
+		}
+	}
 
 		return await this.prisma.friendship.create({
 			data: {senderId, receiverId, status: "PENDING"}

@@ -10,10 +10,11 @@ import { UserService } from './services/user.service'
 import { FriendRepository } from './repositories/friend.repository'
 import { FriendController } from './controllers/friend.controller'
 import { FriendService } from './services/friend.service'
+import { NotificationService } from './services/notification.service'
 
 @Module({
-	exports: [UserRepository, RefreshTokenRepository, UserService, FriendService],
-	providers: [UserRepository, RefreshTokenRepository, UserService, CommonService, MinioService, MailService, ProfileRepository, FriendRepository, FriendService],
+	exports: [UserRepository, RefreshTokenRepository, UserService, FriendService, NotificationService],
+	providers: [UserRepository, RefreshTokenRepository, UserService, CommonService, MinioService, MailService, ProfileRepository, FriendRepository, FriendService, NotificationService],
 	controllers: [UserController, FriendController]
 })
 export class UserModule { }

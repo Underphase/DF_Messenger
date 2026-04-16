@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { getTokens, clearTokens } from '../api/client';
+import { registerDeviceToken, unregisterDeviceToken } from '../services/notifications';
 
 type AuthState = 'loading' | 'authenticated' | 'unauthenticated';
 
@@ -24,6 +25,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const tokens = await getTokens();
         if (tokens?.accessToken && tokens?.refreshToken) {
           setAuthState('authenticated');
+          // Уже залогинен — регистрируем токен
+          await registerDeviceToken();
         } else {
           setAuthState('unauthenticated');
         }
@@ -36,9 +39,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signIn = useCallback(() => {
     setAuthState('authenticated');
+    setTimeout(() => registerDeviceToken(), 500);
   }, []);
 
   const signOut = useCallback(async () => {
+    // Удаляем токен с бэка перед выходом
+    await unregisterDeviceToken();
     await clearTokens();
     setAuthState('unauthenticated');
   }, []);

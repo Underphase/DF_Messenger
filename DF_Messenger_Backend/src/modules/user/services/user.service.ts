@@ -10,6 +10,7 @@ import { changeEmailDto, changePasswordDto, confirmChangeEmailDto, confirmChange
 import { ProfileRepository } from '../repositories/profile.repository'
 import { RefreshTokenRepository } from '../repositories/refreshToken.repository'
 import { UserRepository } from '../repositories/user.repository'
+import { NotificationService } from './notification.service'
 
 @Injectable()
 export class UserService {
@@ -20,7 +21,8 @@ export class UserService {
 		private minio: MinioService,
 		private mail: MailService,
 		private redis: RedisService,
-		private profile: ProfileRepository
+		private profile: ProfileRepository,
+		private notification: NotificationService
 	) { }
 
 	async verifyAndGiveRefreshToken(dto: getRefreshDto) {
@@ -157,5 +159,13 @@ export class UserService {
 		} else {
 			throw new ConflictException('Неверный код!')
 		}
+	}
+
+	async saveDeviceToken(userId: number, token: string) {
+		return this.notification.saveDeviceToken(userId, token)
+	}
+
+	async removeDeviceToken(token: string) {
+		return this.notification.removeDeviceToken(token)
 	}
 }

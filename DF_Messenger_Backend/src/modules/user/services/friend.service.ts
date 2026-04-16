@@ -1,16 +1,18 @@
 import { Injectable } from '@nestjs/common'
 import { FriendRepository } from '../repositories/friend.repository'
+import { UserRepository } from '../repositories/user.repository'
+import { NotificationService } from './notification.service'
 
 @Injectable()
 export class FriendService {
-  constructor(private friendRepo: FriendRepository) { }
+  constructor(
+    private friendRepo: FriendRepository,
+    private userRepo: UserRepository,
+    private notificationService: NotificationService
+  ) { }
 
   async searchUser(currUserId: number, searchText: string, skip?: number) {
     return this.friendRepo.searchUser(currUserId, searchText, skip)
-  }
-
-  async sendFriendRequest(senderId: number, receiverId: number) {
-    return this.friendRepo.sendUserFriendRequest(senderId, receiverId)
   }
 
   async cancelFriendRequest(senderId: number, requestId: number) {
@@ -59,5 +61,23 @@ export class FriendService {
 
   async getBlockedUsers(userId: number, skip?: number) {
     return this.friendRepo.getBlockedUsers(userId)
+  }
+
+  async sendFriendRequest(senderId: number, receiverId: number) {
+    const result = await this.friendRepo.sendUserFriendRequest(senderId, receiverId)
+
+    try {
+      const sender = await this.userRepo.getUserFromId(senderId)
+      await this.notificationService.sendPushToUser(
+        receiverId,
+        'Новый запрос в друзья',
+        sender.nickName,
+        { senderId: String(senderId), type: 'friend_request' }
+      )
+    } catch (e) {
+      console.error('Ошибка отправки push при запросе в друзья:', e)
+    }
+
+    return result
   }
 }

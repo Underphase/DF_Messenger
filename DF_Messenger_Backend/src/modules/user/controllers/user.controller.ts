@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Put, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Post, Put, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
 import { JwtGuard } from '../../../guards/jwt.guard'
 import { changeEmailDto, changePasswordDto, confirmChangeEmailDto, confirmChangePasswordDto, confirmForgotPasswordDto, forgotPassworDto, getRefreshDto, profileUpdateDto } from '../dto/common.dto'
@@ -94,5 +94,19 @@ export class UserController {
   @Post('forgot-password/confirm')
   async confirmForgotPassword(@Body() dto: confirmForgotPasswordDto) {
     return this.userService.confirmForgotPassword(dto)
+  }
+
+  @Post('me/device-token')
+  @UseGuards(JwtGuard)
+  async saveDeviceToken(@Body('token') token: string, @Req() req) {
+    await this.userService.saveDeviceToken(req.user.userId, token)
+    return { success: true }
+  }
+
+  @Delete('me/device-token')
+  @UseGuards(JwtGuard)
+  async removeDeviceToken(@Body('token') token: string) {
+    await this.userService.removeDeviceToken(token)
+    return { success: true }
   }
 }

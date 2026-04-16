@@ -14,10 +14,8 @@ const queryClient = new QueryClient({
   },
 });
 
-// Отдельный компонент — нужен чтобы хук useOfflineQueue мог обращаться
-// к SocketContext и NetworkContext, которые оборачивают его снаружи
 const AppInner: React.FC = () => {
-  useOfflineQueue(); // запускает синхронизацию очереди при восстановлении сети
+  useOfflineQueue();
   return <RootNavigator />;
 };
 
